@@ -1,0 +1,332 @@
+---
+title: "Multiple Dataset Plotting"
+format: html
+editor: source
+---
+
+```{r}
+
+if(!require("tidyverse")) install.packages("tidyverse"); library(tidyverse)
+
+```
+
+# Data import   
+
+```{r}
+
+my_colnames <- c("residue_position", "ref_sequence", "variant", "count")
+
+gnomad <- read_csv("gnomAD/gnomAD_SNCA_missense_only.csv")
+gnomad <- gnomad[,1:(ncol(gnomad)-1)]
+colnames(gnomad) <- my_colnames
+gnomad$dataset <- "gnomAD v2.1.1"
+
+
+genomes <- read_csv("1000genomes/1000_genomes_SNCA_missense_only.csv")
+genomes <- genomes[,1:(ncol(genomes)-1)]
+colnames(genomes) <- my_colnames
+genomes$dataset <- "1000 Genomes Project Phase 3"
+
+
+```
+
+```{r}
+
+missense_only <- rbind(gnomad, genomes)
+
+```
+
+# Mutations per region 
+
+```{r}
+# Number of missense mutants per region
+
+missense_count_per_region <- data.frame(dataset = "", count = 0, length = 0, region = "")
+missense_unique_per_region <- data.frame(dataset = "", n = 0, length = 0, region = "")
+
+# N-term 1-60
+# P1 36-42
+# P2 45-57
+# NAC 61-95
+# C-term 96-140
+
+region_limits <- c(1, 60, 36, 42, 45, 57, 61, 95, 96, 140)
+region_names <- c("N-terminus", "P1", "P2", "NAC", "C-terminus")
+region_length <- c(60, 7, 13, 35, 45)
+j = 0
+
+for (i in 1:length(region_limits)) {
+  
+  if (i %% 2 != 0) {
+    
+    j = j + 1
+    
+    # Sums total counts for the specified region for each dataset
+    current_count <- missense_only %>% filter(missense_only$residue_position >= region_limits[i] & 
+                                              missense_only$residue_position <= region_limits[i+1]) %>% 
+                                              group_by(dataset) %>% 
+                                              summarise_at(vars(count), funs(sum))
+    current_count$length <- region_length[j]
+    current_count$region <- region_names[j]
+
+    # Counts the number or rows for each dataset i.e de novo mutants
+    current_unique <- missense_only %>% filter(missense_only$residue_position >= region_limits[i] & 
+                                               missense_only$residue_position <= region_limits[i+1]) %>% 
+                                               group_by(dataset) %>% 
+                                               count()
+    
+    current_unique$length <- region_length[j]
+    current_unique$region <- region_names[j]
+   
+    
+    missense_count_per_region <- rbind(missense_count_per_region, current_count)
+    missense_unique_per_region <- rbind(missense_unique_per_region, current_unique) 
+  }
+}
+
+p1_tmp <- data.frame(dataset = "1000 Genomes Project Phase 3", length = 7, region = "P1", count = 0)
+missense_count_per_region <- rbind(missense_count_per_region, p1_tmp)
+
+p1_tmp <- data.frame(dataset = "1000 Genomes Project Phase 3", length = 7, region = "P1", n = 0)
+missense_unique_per_region <- rbind(missense_unique_per_region, p1_tmp)
+
+
+
+
+rm(list = c("current_count", "current_unique", "i", "j", "my_colnames", 
+            "region_limits", "region_names", "region_length", "p1_tmp"))
+
+```
+
+```{r}
+
+plot_data <- merge(missense_count_per_region, missense_unique_per_region, all = TRUE)
+names(plot_data)[names(plot_data) == "n"] <-"unique"
+plot_data <- plot_data[2:nrow(plot_data), ]
+
+
+
+#plot_data$length <- as.numeric(plot_data$length)
+#plot_data$count <- as.numeric(plot_data$count)
+#plot_data$unique <- as.numeric(plot_data$unique)
+
+plot_data <- plot_data %>% mutate(norm_count = count/length)
+plot_data <- plot_data %>% mutate(norm_unique = unique/length)
+
+# Ordering groups for plotting
+plot_data$region <- factor(plot_data$region, 
+                                     levels = c("N-terminus", "P1", "P2", "NAC", "C-terminus"))
+
+```
+
+# Plotting
+
+```{r}
+
+# Allele count norm to region length
+ggplot(plot_data, aes(x = region, y = norm_count, fill = dataset)) +
+  geom_bar(stat = "identity", position = "dodge", colour = "black", linewidth = 1) +
+  #ggtitle("1000 Genomes Project") +
+  ylab("Missense Variant Count Normalised to Region Length") +
+  xlab("") +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, max(plot_data$norm_count) * 1.05)) +
+  theme(panel.grid.major = element_line(colour = "grey30", linewidth = 0.25, 
+                                          linetype = "dashed"),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(colour = "black", fill = NA, linewidth = 1.5),
+        plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+        legend.title = element_text(size = 16, face = "bold"), 
+        legend.text = element_text(size = 14),
+        axis.title = element_text(size = 18, face = "bold"),
+        axis.text.y = element_text(size = 14, colour = "black"),
+        axis.text.x = element_text(size = 20, colour = "black")) +
+  labs(fill = "Data Source")
+
+ggsave(plot = last_plot(), file = "missense_variant_count_per_region.png", width = 12, height = 8)
+
+# Unique mutation count norm to region length
+ggplot(plot_data, aes(x = region, y = norm_unique, fill = dataset)) +
+  geom_bar(stat = "identity", position = "dodge", colour = "black", linewidth = 1) +
+  #ggtitle("1000 Genomes Project") +
+  ylab("Unique Variant Count Normalised to Region Length") +
+  xlab("") +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, max(plot_data$norm_unique) * 1.05)) +
+  theme(panel.grid.major = element_line(colour = "grey30", linewidth = 0.25, 
+                                          linetype = "dashed"),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(colour = "black", fill = NA, linewidth = 1.5),
+        plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+        legend.title = element_text(size = 16, face = "bold"), 
+        legend.text = element_text(size = 14),
+        axis.title = element_text(size = 18, face = "bold"),
+        axis.text.y = element_text(size = 14, colour = "black"),
+        axis.text.x = element_text(size = 20, colour = "black")) +
+  labs(fill = "Data Source")
+
+ggsave(plot = last_plot(), file = "unique_missense_count_per_region.png", width = 12, height = 8)
+
+
+# Cleaning Environment
+rm(list = c("missense_count_per_region", "missense_unique_per_region", "plot_data"))
+invisible(gc())
+
+```
+
+# SNCA Variation by Residue
+
+```{r}
+
+residues <- unique(genomes$ref_sequence)
+
+current_count = 0
+
+residue_counts_list = c()
+
+for (i in residues) {
+  
+  current_count = 0
+  
+  for (j in 1:nrow(genomes)){
+    
+    if (genomes$ref_sequence[j] == i) {
+      
+      current_count = current_count + genomes$count[j]
+      
+    }
+  }
+  
+  residue_counts_list <- append(residue_counts_list, current_count)
+  
+}
+
+genomes_mutated_residue_counts <- data.frame(residue = residues, times_mutated = residue_counts_list)
+genomes_mutated_residue_counts$dataset <- "1000 Genomes Project Phase 3"
+
+
+#####################################################################################################
+
+
+residues <- unique(gnomad$ref_sequence)
+
+current_count = 0
+
+residue_counts_list = c()
+
+for (i in residues) {
+  
+  current_count = 0
+  
+  for (j in 1:nrow(gnomad)){
+    
+    if (gnomad$ref_sequence[j] == i) {
+      
+      current_count = current_count + gnomad$count[j]
+      
+    }
+  }
+  
+  residue_counts_list <- append(residue_counts_list, current_count)
+  
+}
+
+gnomad_mutated_residue_counts <- data.frame(residue = residues, times_mutated = residue_counts_list)
+gnomad_mutated_residue_counts$dataset <- "gnomAD v2.1.1"
+
+
+#########################################################################################################
+
+mutated_residue_counts <- rbind(genomes_mutated_residue_counts, gnomad_mutated_residue_counts)
+
+# Cleaning Environment
+rm(list = c("genomes_mutated_residue_counts", "gnomad_mutated_residue_counts", 
+            "current_count", "residue_counts_list", "residues", "i", "j"))
+invisible(gc())
+
+```
+
+# Plotting
+
+```{r}
+
+
+ggplot(mutated_residue_counts, aes(x = reorder(residue, -times_mutated), y = times_mutated, fill = dataset)) +
+  geom_bar(stat = "identity", linewidth = 0.75, colour = "black", position = "dodge") +
+  ggtitle("Missense Mutation Counts per Residue") +
+  ylab("Missense Mutation Count") +
+  xlab("Reference Residue Mutated") +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, max(mutated_residue_counts$times_mutated) * 1.05), 
+                     breaks = seq(0,1000,5)) +
+  theme(panel.grid.major = element_line(colour = "grey30", linewidth = 0.25, 
+                                          linetype = "dashed"),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(colour = "black", fill = NA, linewidth = 1.5),
+        plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+        legend.title = element_text(size = 16, face = "bold"), 
+        legend.text = element_text(size = 14),
+        axis.title = element_text(size = 18, face = "bold"),
+        axis.text = element_text(size = 14, colour = "black")) +
+  labs(fill = "Data Source")
+
+ggsave(plot = last_plot(), file = "num_missense_per_WT_residue.png", height = 6, width = 10)
+
+
+
+# NORMALISE TO THE NUMBER OF OCCURENCES OF EACH RESIDUE IN ASYN SEQUENCE!
+
+asyn_sequence <- read_file("1000genomes/asyn_peptide_sequence.txt")
+
+mutated_residue_counts$occurences <- 0
+
+for (i in 1:nrow(mutated_residue_counts)) {
+ 
+  mutated_residue_counts$occurences[i] <- str_count(asyn_sequence, mutated_residue_counts$residue[i])
+   
+}
+
+mutated_residue_counts <- mutated_residue_counts %>% mutate(norm = times_mutated / occurences)
+### ISSUE: claims that W and C occur in normal asyn and have been mutated 
+
+ggplot(mutated_residue_counts, aes(x = reorder(residue, -norm), y = norm, fill = dataset)) +
+  geom_bar(stat = "identity", linewidth = 0.75, colour = "black", position = "dodge") +
+  ggtitle("Mutation Counts Normalised to Occurences in Sequence") +
+  ylab("Normalised Missense Mutation Count") +
+  xlab("Reference Residue Mutated") +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, max(mutated_residue_counts$norm) * 1.05), 
+                     breaks = seq(0,100,1)) +
+  theme(panel.grid.major = element_line(colour = "grey30", linewidth = 0.25, 
+                                          linetype = "dashed"),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(colour = "black", fill = NA, linewidth = 1.5),
+        plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+        legend.title = element_text(size = 16, face = "bold"), 
+        legend.text = element_text(size = 14),
+        axis.title = element_text(size = 18, face = "bold"),
+        axis.text = element_text(size = 14, colour = "black")) +
+  labs(fill = "Data Source")
+
+ggsave(plot = last_plot(), file = "normalised_missense_count.png", height = 6, width = 10)
+
+```
+
+# Identifying Common Mutants Across Datasets
+
+```{r}
+
+common_mutants <- missense_only[duplicated(missense_only[c("residue_position", "variant")]), 1:3]
+
+write.csv(common_mutants, file = "common_missense_mutants.csv", row.names = FALSE)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,3 @@
+gnomAD v2.1.1 - SNCA
+
+https://gnomad.broadinstitute.org/gene/ENSG00000145335?dataset=gnomad_r2_1

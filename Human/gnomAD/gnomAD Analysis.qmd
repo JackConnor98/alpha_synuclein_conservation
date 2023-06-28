@@ -1,0 +1,691 @@
+---
+title: "gnomAD v2.1.1 SNCA Variant Analysis"
+author: "Jack Connor"
+format: html
+---
+
+```{r}
+
+if(!require("tidyverse")) install.packages("tidyverse"); library("tidyverse")
+if(!require("ggrepel")) install.packages("ggrepel"); library(ggrepel)
+if(!require("ggbreak")) install.packages("ggbreak"); library(ggbreak)
+
+```
+
+```{r}
+# Import Data
+df <- read.csv("gnomAD_v2.1.1_ENSG00000145335.csv")
+
+# Selecting Columns of Interest
+data <- subset(df, select = c("Protein.Consequence", "VEP.Annotation", 
+                              "Allele.Count", "Allele.Number", "Allele.Frequency"))
+
+# Removing non-coding regions
+data <- data[!data$Protein.Consequence == "",]
+
+# Removing p. from Protein.Consequence
+data$Protein.Consequence <- gsub("p.", "", data$Protein.Consequence)
+
+# Separating Protein consequence into residue_position, WT and variant
+data$wild_type <- substr(data$Protein.Consequence, 1, 3)  # Extract the first 3 characters
+data$residue_position <- as.integer(gsub("\\D", "", data$Protein.Consequence))  # Extract numeric characters using regular expression
+data$variant <- gsub(".*?(\\D+)$", "\\1", data$Protein.Consequence)  # Extract non-numeric characters at the end of the string
+
+# Temporarily removing insertions and stop gained as it complicates things
+# There is only 1 inertion, 1 deletion and 1 stop codon gained 
+
+filtered_data <- data[grepl("synonymous", data$VEP.Annotation) | grepl("missense", data$VEP.Annotation), ]
+
+```
+
+# Converting from 3-letter AA code to 1-letter AA code for consistency with 1000 Genomes analysis
+# Also fixing mislabelled WT residues
+
+```{r}
+
+# Define the lookup table
+aa_lookup <- c("Ala" = "A", "Arg" = "R", "Asn" = "N", "Asp" = "D", "Cys" = "C", "Gln" = "Q", "Glu" = "E",
+               "Gly" = "G", "His" = "H", "Ile" = "I", "Leu" = "L", "Lys" = "K", "Met" = "M", "Phe" = "F",
+               "Pro" = "P", "Ser" = "S", "Thr" = "T", "Trp" = "W", "Tyr" = "Y", "Val" = "V")
+
+# Importing Wild-Type asyn 3 letter AA sequence
+asyn_sequence <- read_file("asyn_peptide_sequence_3_letter.txt")
+
+# Creating a data frame for the reference sequence with residue positions
+reference <- data.frame(ref_sequence = str_split_1(asyn_sequence, "-"),
+                        residue_position = seq(1,140,1))
+
+# Adding ref_sequence column to filtered_data
+filtered_data <- merge(filtered_data, reference, by = "residue_position")
+
+# Convert three-letter codes to one-letter codes for "ref_sequence" and "variant" columns
+filtered_data <- mutate(filtered_data, ref_sequence = sapply(ref_sequence, function(x) {
+                                                      if (x %in% names(aa_lookup)) {
+                                                        return(aa_lookup[[x]])
+                                                      } else {
+                                                        return(x)  # Set to a default value or leave it unchanged
+                                                      }
+                                                    }),
+                                        variant = sapply(variant, function(x) {
+                                                  if (x %in% names(aa_lookup)) {
+                                                    return(aa_lookup[[x]])
+                                                  } else {
+                                                    return(x)  # Set to a default value or leave it unchanged
+                                                  }
+                                                }))
+
+# Removing wild_type column
+filtered_data <- subset(filtered_data, select = -wild_type)
+
+```
+
+
+
+```{r}
+# Plotting missense data
+
+# Selecting only missense data
+missense_only <- filtered_data[grepl("missense", filtered_data$VEP.Annotation), ]
+
+# Creating a label column
+missense_only <- missense_only %>% mutate(label = paste(ref_sequence, variant, sep = "/"))
+
+# Allele Counts
+
+ggplot(missense_only, aes(x = residue_position, y = Allele.Count)) +
+  geom_point(size = 5) +
+  geom_label_repel(data = subset(missense_only, Allele.Count >= 10),
+                   aes(label = label, fill = "tomato3"),
+                  box.padding   = 0.5, 
+                  point.padding = 0.5,
+                  segment.color = "black",
+                  label.size = 0.5,
+                  size = 5) +
+  ggtitle("gnomAD v2.1.1") +
+  ylab("Allele Count") +
+  xlab("Residue Position") +
+  scale_y_continuous(breaks = seq(0,1000,10)) +
+  scale_x_continuous(breaks = seq(0,140,5)) +
+  theme_classic() +
+  theme(panel.grid.major = element_line(colour = "grey30", linewidth = 0.25, 
+                                          linetype = "dashed"),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(colour = "black", fill = NA, linewidth = 1.5),
+        plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+        axis.title = element_text(size = 18, face = "bold"),
+        axis.text = element_text(size = 12, colour = "black"),
+        legend.position = "none")
+
+ggsave(plot = last_plot(), paste0("gnomAD_allele_counts.png"), height = 5, width = 12)
+
+# Excluding 141 K96R allele count
+
+tmp <- missense_only %>% filter(Allele.Count < 140)
+
+ggplot(tmp, aes(x = residue_position, y = Allele.Count)) +
+  geom_point(size = 5) +
+  geom_label_repel(data = subset(tmp, Allele.Count >= 10),
+                   aes(label = label, fill = "tomato3"),
+                  box.padding   = 0.5, 
+                  point.padding = 0.5,
+                  segment.color = "black",
+                  label.size = 0.5,
+                  size = 5) +
+  ggtitle("gnomAD v2.1.1") +
+  ylab("Allele Count") +
+  xlab("Residue Position") +
+  scale_y_continuous(breaks = seq(0,1000,1)) +
+  scale_x_continuous(breaks = seq(0,140,5)) +
+  theme_classic() +
+  theme(panel.grid.major = element_line(colour = "grey30", linewidth = 0.25, 
+                                          linetype = "dashed"),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(colour = "black", fill = NA, linewidth = 1.5),
+        plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+        axis.title = element_text(size = 18, face = "bold"),
+        axis.text = element_text(size = 12, colour = "black"),
+        legend.position = "none")
+
+ggsave(plot = last_plot(), paste0("gnomAD_allele_counts_zoomed.png"), height = 5, width = 12)
+
+
+# Allele Frequency
+
+ggplot(missense_only, aes(x = residue_position, y = Allele.Frequency)) +
+  geom_hline(yintercept = 5e-4, linetype = "dotted", colour = "red", linewidth = 1) +
+  geom_point(size = 5) +
+  geom_label_repel(data = missense_only %>% top_n(5, Allele.Count),
+                   aes(label = label, fill = "tomato3"),
+                   box.padding   = 0.5, 
+                   point.padding = 0.5,
+                   segment.color = "black",
+                   label.size = 0.5,
+                   size = 5) +
+  ggtitle("gnomAD v2.1.1") +
+  ylab("Allele Frequency") +
+  xlab("Residue Position") +
+  scale_y_log10() +
+  scale_x_continuous(breaks = seq(0,140,5)) +
+  theme_classic() +
+  theme(panel.grid.major = element_line(colour = "grey30", linewidth = 0.25, 
+                                          linetype = "dashed"),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(colour = "black", fill = NA, linewidth = 1.5),
+        plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+        axis.title = element_text(size = 18, face = "bold"),
+        axis.text = element_text(size = 12, colour = "black"),
+        legend.position = "none")
+
+ggsave(plot = last_plot(), paste0("gnomAD_allele_frequency.png"), height = 5, width = 12)
+
+```
+
+# Number of mutations
+
+```{r}
+
+# Number of total synonomous and missense
+sum(filtered_data$Allele.Count)
+# 1412
+
+# Number of total synonomous
+sum(filtered_data$Allele.Count[filtered_data$VEP.Annotation == "synonymous_variant"])
+# 1085
+
+# Number of total missense
+sum(missense_only$Allele.Count)
+# 327
+
+
+# Number of unique SNPs
+nrow(filtered_data)
+# 108
+
+# Number of unique synonomous 
+nrow(filtered_data %>% filter(VEP.Annotation == "synonymous_variant"))
+# 35
+
+# Number of unique missense
+nrow(missense_only)
+# 73
+
+# Number of missense mutants per region
+
+# N-term 1-60
+n_term <- sum(missense_only$Allele.Count[missense_only$residue_position >= 1 & 
+                                         missense_only$residue_position <= 60])
+# 55
+
+# P1 36-42
+p1 <- sum(missense_only$Allele.Count[missense_only$residue_position >= 36 & 
+                                     missense_only$residue_position <= 42])
+# 6
+
+# P2 45-57
+p2 <- sum(missense_only$Allele.Count[missense_only$residue_position >= 45 & 
+                                     missense_only$residue_position <= 57])
+# 31
+
+
+# NAC 61-95
+nac <- sum(missense_only$Allele.Count[missense_only$residue_position >= 61 & 
+                                      missense_only$residue_position <= 95])
+# 18
+
+# C-term 96-140
+c_term <- sum(missense_only$Allele.Count[missense_only$residue_position >= 96 & 
+                                         missense_only$residue_position <= 140])
+
+# 254
+
+# Number of unique missense mutants per region
+
+# N-term 1-60
+n_term_unique <- length(unique(missense_only$Protein.Consequence[missense_only$residue_position >= 1 & 
+                                                                 missense_only$residue_position <= 60]))
+# 25
+
+# P1 36-42
+p1_unique <- length(unique(missense_only$Protein.Consequence[missense_only$residue_position >= 36 & 
+                                                             missense_only$residue_position <= 42]))
+# 5
+
+# P2 45-57
+p2_unique <- length(unique(missense_only$Protein.Consequence[missense_only$residue_position >= 45 & 
+                                                             missense_only$residue_position <= 57]))
+# 7
+
+
+# NAC 61-95
+nac_unique <- length(unique(missense_only$Protein.Consequence[missense_only$residue_position >= 61 & 
+                                                              missense_only$residue_position <= 95]))
+# 11
+
+# C-term 96-140
+c_term_unique <- length(unique(missense_only$Protein.Consequence[missense_only$residue_position >= 96 & 
+                                                                 missense_only$residue_position <= 140]))
+
+# 37
+
+
+```
+
+# Plotting num missense mutations by region
+
+```{r}
+
+missense_per_region <- data.frame(region = c("N-terminus", "P1", "P2", "NAC", "C-terminus"), 
+                                  length = c(60, 7, 13, 35, 45), 
+                                  count = c(n_term, p1, p2, nac, c_term),
+                                  unique = c(n_term_unique, p1_unique, p2_unique, nac_unique, c_term_unique))
+
+# Cleaning Environment
+rm(list = c("n_term", "p1", "p2", "nac", "c_term", 
+            "n_term_unique", "p1_unique", "p2_unique", "nac_unique", "c_term_unique"))
+invisible(gc())
+
+missense_per_region <- missense_per_region %>% mutate(norm_count = count/length)
+missense_per_region <- missense_per_region %>% mutate(norm_unique = unique/length)
+
+
+# Ordering groups for plotting
+missense_per_region$region <- factor(missense_per_region$region, 
+                                     levels = c("N-terminus", "P1", "P2", "NAC", "C-terminus"))
+
+# Plotting
+
+# Allele count norm to region length
+ggplot(missense_per_region, aes(x = region, y = norm_count)) +
+  geom_bar(stat = "identity", colour = "black", linewidth = 1) +
+  ggtitle("gnomAD v2.1.1") +
+  ylab("Allele Count Normalised to Region Length") +
+  xlab("") +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, max(missense_per_region$norm_count) * 1.05)) +
+  theme(panel.grid.major = element_line(colour = "grey30", linewidth = 0.25, 
+                                          linetype = "dashed"),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(colour = "black", fill = NA, linewidth = 1.5),
+        plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+        axis.title = element_text(size = 18, face = "bold"),
+        axis.text.y = element_text(size = 14, colour = "black"),
+        axis.text.x = element_text(size = 20, colour = "black"))
+
+ggsave(plot = last_plot(), file = "missense_allele_count_per_region.png", width = 7, height = 8)
+
+# Unique mutation count norm to region length
+ggplot(missense_per_region, aes(x = region, y = norm_unique)) +
+  geom_bar(stat = "identity", colour = "black", linewidth = 1) +
+  ggtitle("gnomAD v2.1.1") +
+  ylab("Unique Variant Normalised to Region Length") +
+  xlab("") +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, max(missense_per_region$norm_unique) * 1.05)) +
+  theme(panel.grid.major = element_line(colour = "grey30", linewidth = 0.25, 
+                                          linetype = "dashed"),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(colour = "black", fill = NA, linewidth = 1.5),
+        plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+        axis.title = element_text(size = 18, face = "bold"),
+        axis.text.y = element_text(size = 14, colour = "black"),
+        axis.text.x = element_text(size = 20, colour = "black"))
+
+ggsave(plot = last_plot(), file = "unique_missense_count_per_region.png", width = 7, height = 8)
+
+```
+
+
+# Counting how many mutations for each amino acid
+
+```{r}
+# Selecting columns of interest
+missense_only <- subset(missense_only, select = c("residue_position", "ref_sequence", "variant", 
+                                                  "Allele.Count", "Allele.Frequency"))
+
+write.csv(missense_only, file = "gnomAD_SNCA_missense_only.csv", row.names = FALSE)
+
+# Counting the number of occurrences of each residue
+residue_counts <- missense_only %>% count(ref_sequence)
+
+# Calculating the sum of the allele counts for each unique residue
+mutation_counts <- missense_only %>% group_by(ref_sequence) %>% summarize(num_mutations = sum(Allele.Count))
+
+# Creating plot_data
+plot_data <- merge(mutation_counts, residue_counts, by = "ref_sequence")
+
+# Calculating the mutation_freq by normalising the number of mutations by the number of occurences of each residue in the primary sequence
+plot_data <- plot_data %>% mutate(mutation_freq = num_mutations / n)
+
+```
+
+# Adding in AA properties to colour the plots
+
+```{r}
+
+# Creating an empty column to assign properties to in the for loop
+plot_data$property <- NA
+
+for (i in 1:length(plot_data$ref_sequence)) {
+  
+  # Assigning Hydrophobic Residues
+  for (j in c("A", "V", "I", "L", "M", "G", "C")) {
+    if (plot_data$ref_sequence[i] == j) {
+        plot_data$property[i] <- "Hydrophobic"
+    }
+  }
+  # Assigning Aromatic Residues
+  for (j in c("F", "W", "Y")) {
+    if (plot_data$ref_sequence[i] == j) {
+        plot_data$property[i] <- "Aromatic"
+    }
+  }
+  # Assigning Positive Residues
+  for (j in c("R", "K", "H")) {
+    if (plot_data$ref_sequence[i] == j) {
+        plot_data$property[i] <- "Positive"
+    }
+  }
+  # Assigning Negative Residues
+  for (j in c("D", "E")) {
+    if (plot_data$ref_sequence[i] == j) {
+        plot_data$property[i] <- "Negative"
+    }
+  }
+  # Assigning Polar Residues
+  for (j in c("N", "S", "T", "Q")) {
+    if (plot_data$ref_sequence[i] == j) {
+        plot_data$property[i] <- "Polar"
+    }
+  }
+  
+  ### Special Cases ###
+  
+  # Assigning Proline 
+  for (j in c("P")) {
+    if (plot_data$ref_sequence[i] == j) {
+        plot_data$property[i] <- "Proline"
+    }
+  }
+}
+
+property_fill <- c(Aromatic = "darkgreen", Hydrophobic = "gold3", Positive = "tomato2", 
+                   Negative = "deepskyblue3", Polar = "purple", Proline = "grey30")
+
+# Cleaning Environment
+rm(list = c("i", "j"))
+invisible(gc())
+
+```
+
+# Plotting mutation counts
+
+```{r}
+
+# Plotting number of mutations at each residue
+
+ggplot(plot_data, aes(x = reorder(ref_sequence, -num_mutations), y = num_mutations, fill = property)) +
+  geom_bar(stat = "identity", linewidth = 0.75, colour = "black") +
+  ggtitle("gnomAD v2.1.1") +
+  ylab("Missense Mutation Count") +
+  xlab("Mutated Residue") +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, max(plot_data$num_mutations) * 1.05)) +
+  scale_fill_manual(values = property_fill) +
+  theme(panel.grid.major = element_line(colour = "grey30", linewidth = 0.25, 
+                                          linetype = "dashed"),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(colour = "black", fill = NA, linewidth = 1.5),
+        plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+        axis.title = element_text(size = 18, face = "bold"),
+        axis.text = element_text(size = 14, colour = "black"),
+        legend.title = element_text(size = 16, colour = "black", face = "bold"),
+        legend.text = element_text(size = 14, colour = "black")) +
+  labs(fill = "Property")
+
+ggsave(plot = last_plot(), file = "missense_count.png", height = 6, width = 10)
+
+# Plotting num. mutations at each residue normalised by number of occurences in the primary sequence
+
+ggplot(plot_data, aes(x = reorder(ref_sequence, -mutation_freq), y = mutation_freq, fill = property)) +
+  geom_bar(stat = "identity", linewidth = 0.75, colour = "black") +
+  ggtitle("gnomAD v2.1.1") +
+  ylab("Normalised Missense Mutation Count") +
+  xlab("Mutated Residue") +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, max(plot_data$mutation_freq) * 1.05)) +
+  scale_fill_manual(values = property_fill) +
+  theme(panel.grid.major = element_line(colour = "grey30", linewidth = 0.25, 
+                                          linetype = "dashed"),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(colour = "black", fill = NA, linewidth = 1.5),
+        plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+        axis.title = element_text(size = 18, face = "bold"),
+        axis.text = element_text(size = 14, colour = "black"),
+        legend.title = element_text(size = 16, colour = "black", face = "bold"),
+        legend.text = element_text(size = 14, colour = "black")) +
+  labs(fill = "Property")
+
+ggsave(plot = last_plot(), file = "normalised_missense_count.png", height = 6, width = 10)
+
+```
+
+# Plotting SNCA Sequence Composition
+
+```{r}
+# Reading in asyn sequence
+asyn_sequence <- read_file("asyn_peptide_sequence.txt")
+
+residues <- str_split_1(asyn_sequence, "")
+
+asyn_sequence_composition <- tibble(residues = residues) %>%
+                              group_by(residues) %>%
+                                summarise(count = n())
+
+# Creating an empty column to assign properties to in the for loop
+asyn_sequence_composition$property <- NA
+
+for (i in 1:length(asyn_sequence_composition$residues)) {
+  
+  # Assigning Hydrophobic Residues
+  for (j in c("A", "V", "I", "L", "M", "G", "C")) {
+    if (asyn_sequence_composition$residues[i] == j) {
+        asyn_sequence_composition$property[i] <- "Hydrophobic"
+    }
+  }
+  # Assigning Aromatic Residues
+  for (j in c("F", "W", "Y")) {
+    if (asyn_sequence_composition$residues[i] == j) {
+        asyn_sequence_composition$property[i] <- "Aromatic"
+    }
+  }
+  # Assigning Positive Residues
+  for (j in c("R", "K", "H")) {
+    if (asyn_sequence_composition$residues[i] == j) {
+        asyn_sequence_composition$property[i] <- "Positive"
+    }
+  }
+  # Assigning Negative Residues
+  for (j in c("D", "E")) {
+    if (asyn_sequence_composition$residues[i] == j) {
+        asyn_sequence_composition$property[i] <- "Negative"
+    }
+  }
+  # Assigning Polar Residues
+  for (j in c("N", "S", "T", "Q")) {
+    if (asyn_sequence_composition$residues[i] == j) {
+        asyn_sequence_composition$property[i] <- "Polar"
+    }
+  }
+  
+  ### Special Cases ###
+  
+  # Assigning Proline 
+  for (j in c("P")) {
+    if (asyn_sequence_composition$residues[i] == j) {
+        asyn_sequence_composition$property[i] <- "Proline"
+    }
+  }
+}
+
+property_fill <- c(Aromatic = "darkgreen", Hydrophobic = "gold3", Positive = "tomato2", 
+                   Negative = "deepskyblue3", Polar = "purple", Proline = "grey30")
+
+# Cleaning Environment
+rm(list = c("i", "j"))
+invisible(gc())
+
+
+# Plotting SNCA sequence composition
+
+ggplot(asyn_sequence_composition, aes(x = reorder(residues, -count), y = count, fill = property)) +
+  geom_bar(stat = "identity", linewidth = 0.75, colour = "black") +
+  ggtitle("SNCA Sequence Composition") +
+  ylab("Number of Occurences in Sequence") +
+  xlab("Residue") +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, max(asyn_sequence_composition$count) * 1.05), breaks = seq(0,100,1)) +
+  scale_fill_manual(values = property_fill) +
+  theme(panel.grid.major = element_line(colour = "grey30", linewidth = 0.25, 
+                                          linetype = "dashed"),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(colour = "black", fill = NA, linewidth = 1.5),
+        plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+        axis.title = element_text(size = 18, face = "bold"),
+        axis.text = element_text(size = 14, colour = "black"),
+        legend.title = element_text(size = 16, colour = "black", face = "bold"),
+        legend.text = element_text(size = 14, colour = "black")) +
+  labs(fill = "Property")
+
+ggsave(plot = last_plot(), file = "SNCA_residue_composition.png", height = 6, width = 10)
+
+
+
+```
+
+
+```{r}
+
+# Counting the number of de novo variants for each amino acid
+de_novo_per_residue <- missense_only %>% 
+                        count(ref_sequence)
+
+# Normmalising to number of times each residue occurs in the sequence
+asyn_sequence <- read_file("asyn_peptide_sequence.txt")
+
+de_novo_per_residue$occurences <- 0
+
+for (i in 1:nrow(de_novo_per_residue)) {
+ 
+  de_novo_per_residue$occurences[i] <- str_count(asyn_sequence, de_novo_per_residue$ref_sequence[i])
+   
+}
+
+de_novo_per_residue <- de_novo_per_residue %>% mutate(norm = n / occurences)
+
+
+# Creating an empty column to assign properties to in the for loop
+de_novo_per_residue$property <- NA
+
+for (i in 1:length(de_novo_per_residue$ref_sequence)) {
+  
+  # Assigning Hydrophobic Residues
+  for (j in c("A", "V", "I", "L", "M", "G", "C")) {
+    if (de_novo_per_residue$ref_sequence[i] == j) {
+        de_novo_per_residue$property[i] <- "Hydrophobic"
+    }
+  }
+  # Assigning Aromatic Residues
+  for (j in c("F", "W", "Y")) {
+    if (de_novo_per_residue$ref_sequence[i] == j) {
+        de_novo_per_residue$property[i] <- "Aromatic"
+    }
+  }
+  # Assigning Positive Residues
+  for (j in c("R", "K", "H")) {
+    if (de_novo_per_residue$ref_sequence[i] == j) {
+        de_novo_per_residue$property[i] <- "Positive"
+    }
+  }
+  # Assigning Negative Residues
+  for (j in c("D", "E")) {
+    if (de_novo_per_residue$ref_sequence[i] == j) {
+        de_novo_per_residue$property[i] <- "Negative"
+    }
+  }
+  # Assigning Polar Residues
+  for (j in c("N", "S", "T", "Q")) {
+    if (de_novo_per_residue$ref_sequence[i] == j) {
+        de_novo_per_residue$property[i] <- "Polar"
+    }
+  }
+  
+  ### Special Cases ###
+  
+  # Assigning Proline 
+  for (j in c("P")) {
+    if (de_novo_per_residue$ref_sequence[i] == j) {
+        de_novo_per_residue$property[i] <- "Proline"
+    }
+  }
+}
+
+property_fill <- c(Aromatic = "darkgreen", Hydrophobic = "gold3", Positive = "tomato2", 
+                   Negative = "deepskyblue3", Polar = "purple", Proline = "grey30")
+
+# Cleaning Environment
+rm(list = c("i", "j"))
+invisible(gc())
+
+```
+
+# Plotting de novo mutation counts per residue
+
+```{r}
+
+# Plotting number of mutations at each residue
+
+ggplot(de_novo_per_residue, aes(x = reorder(ref_sequence, -n), y = n, fill = property)) +
+  geom_bar(stat = "identity", linewidth = 0.75, colour = "black") +
+  ggtitle("gnomAD v2.1.1") +
+  ylab("De Novo Missense Mutation Count") +
+  xlab("Mutated Residue") +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, max(de_novo_per_residue$n) * 1.05)) +
+  scale_fill_manual(values = property_fill) +
+  theme(panel.grid.major = element_line(colour = "grey30", linewidth = 0.25, 
+                                          linetype = "dashed"),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(colour = "black", fill = NA, linewidth = 1.5),
+        plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+        axis.title = element_text(size = 18, face = "bold"),
+        axis.text = element_text(size = 14, colour = "black"),
+        legend.title = element_text(size = 16, colour = "black", face = "bold"),
+        legend.text = element_text(size = 14, colour = "black")) +
+  labs(fill = "Property")
+
+ggsave(plot = last_plot(), file = "corrected_de_novo_missense_per_WT_residue.png", height = 6, width = 10)
+
+# Plotting num. mutations at each residue normalised by number of occurences in the primary sequence
+
+ggplot(de_novo_per_residue, aes(x = reorder(ref_sequence, -norm), y = norm, fill = property)) +
+  geom_bar(stat = "identity", linewidth = 0.75, colour = "black") +
+  ggtitle("gnomAD v2.1.1") +
+  ylab("Normalised De Novo Missense Mutation Count") +
+  xlab("Mutated Residue") +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, max(de_novo_per_residue$norm) * 1.05)) +
+  scale_fill_manual(values = property_fill) +
+  theme(panel.grid.major = element_line(colour = "grey30", linewidth = 0.25, 
+                                          linetype = "dashed"),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(colour = "black", fill = NA, linewidth = 1.5),
+        plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+        axis.title = element_text(size = 18, face = "bold"),
+        axis.text = element_text(size = 14, colour = "black"),
+        legend.title = element_text(size = 16, colour = "black", face = "bold"),
+        legend.text = element_text(size = 14, colour = "black")) +
+  labs(fill = "Property")
+
+ggsave(plot = last_plot(), file = "corrected_normalised_de_novo_missense_per_residue.png", height = 6, width = 10)
+
+```
+
+
+
+
+
+
+
