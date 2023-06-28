@@ -1,0 +1,1503 @@
+---
+title: "Alpha Synuclein Orthologue Analysis"
+author: "Jack Connor"
+date: "03/29/2023"
+
+format: 
+  html: 
+    code-fold: true # Code can be shown when toggled
+    code-tools: true # global options to expand or hide all chunks
+    df-print: paged # control how df's are printed
+    
+---
+
+# 1. Alpha-Synuclein Conservation
+
+To better understand the impact of missense mutations on alpha-synuclein it is important to look at how the protein sequence has been conserved through evolution. Hopefully by identifying well conserved regions it can inform us where missense mutations are likely to have the greatest impact.
+
+To do this I downloaded all the α-syn orthologues from Ensembl and aligned them (@fig-gene-tree). I then exported these aligned sequences and carried out analysis to count the number of occurrences of each amino acid at each position (@fig-whole-alignment). For ease of interpretation, I removed sections that did not correspond to human α-syn (@fig-min-alignment) and then I grouped the amino acids by their properties (@fig-min-alignment-property). 
+
+::: {#fig-gene-tree column=screen fig-cap="The Ensembl gene tree for SNCA. Shown in the tree is the number of SNCA homologues across different species. Importantly, for further analysis, only orthologues were used. Paralogues were intentionally avoided as they were analysed separately to provide information on SNCA, SNCB and SNCG independently."}
+
+![](quarto_images/Human_SNCA.png)
+
+:::
+
+The decision to use only orthologues was made to avoid comparing alpha-synuclein sequences with those of beta- and gamma- synuclein. To avoid confusion, the terms homologue, orthologue and paralogue are explained in @fig-homologue.
+
+::: {#fig-homologue column=body fig-cap="**Homologues** are genes inherited in two species from a common ancestor. **Orthologues** are defined as genes in different species that have evolved through speciation events only. **Paralogues**, a pair of genes that derives from the same ancestral gene, arise by duplication events and now reside at different locations within the same genome."}
+
+![](quarto_images/orthologue.png)
+
+:::
+
+
+```{r}
+#| include: false
+
+# Installing and Loading Packages
+if (!require("rmarkdown")) install.packages("rmarkdown"); library("rmarkdown")
+if (!require("rstudioapi")) install.packages("rstudioapi"); library("rstudioapi")
+if (!require("readxl")) install.packages("readxl"); library("readxl")
+if (!require("tidyverse")) install.packages("tidyverse"); library("tidyverse")
+if (!require("ggplot2")) install.packages("ggplot2"); library("ggplot2")
+
+```
+
+```{r}
+
+# Creating Save Directories
+
+if (dir.exists("R_output") == FALSE) dir.create("R_output")
+
+if (dir.exists("R_output/full_alignment") == FALSE) dir.create("R_output/full_alignment")
+if (dir.exists("R_output/full_alignment/Data") == FALSE) dir.create("R_output/full_alignment/Data")
+if (dir.exists("R_output/full_alignment/Figures") == FALSE) dir.create("R_output/full_alignment/Figures")
+
+
+if (dir.exists("R_output/human_alignment") == FALSE) dir.create("R_output/human_alignment")
+if (dir.exists("R_output/human_alignment/Data") == FALSE) dir.create("R_output/human_alignment/Data")
+if (dir.exists("R_output/human_alignment/Figures") == FALSE) dir.create("R_output/human_alignment/Figures")
+
+
+if (dir.exists("R_output/P2") == FALSE) dir.create("R_output/P2")
+if (dir.exists("R_output/P2/Data") == FALSE) dir.create("R_output/P2/Data")
+if (dir.exists("R_output/P2/Figures") == FALSE) dir.create("R_output/P2/Figures")
+
+```
+
+# 2.Importing Data
+
+The first step of the analysis is to read in all of the raw fasta sequence files and combine them into one large data frame we can then use for analysis. 
+
+```{r}
+#| column: page
+#| message: false
+
+
+# Read in the file
+# readLines() creates a variable where each element contains a string for each line of the file
+lines <- readLines("Human_SNCA_orthologues.fa")
+
+# Initialize empty vectors for species names and sequences
+# Vectors need to be initialized prior to using in a loop
+species_list <- c()
+sequences_list <- c()
+
+# Initialize new variables to hold the current names and sequence before adding them to the list
+current_species <- ""
+current_sequence <- ""
+
+# Parse the lines
+for (line in lines) { # goes through all the lines one by one 
+  if (substr(line, 1, 1) == ">") { # substr(character_vector, start, stop)
+    # New species, save previous sequence
+    if (current_species != "") {
+      species_list <- c(species_list, current_species)
+      sequences_list <- c(sequences_list, current_sequence)
+    }
+    # Start new sequence with this name
+    current_species <- gsub('>', '', line) # removing >
+    current_sequence <- ""
+  } else {
+    # Add to current sequence
+    current_sequence <- paste(current_sequence, line, sep="")
+  }
+}
+
+# Save the last species and sequence
+species_list <- c(species_list, current_species)
+sequences_list <- c(sequences_list, current_sequence)
+
+# Create a data frame with the species and sequence information
+df <- data.frame(species = species_list, sequence = sequences_list)
+
+# Removing Transcripts found in more than 1 synuclein
+duplicates <- read.csv("C:/Users/Jack_/Desktop/Leeds/Conservation/Orthologues/synuclein_duplicate_homologues.csv")
+to_remove <- unique(duplicates$species)
+df <- df %>% filter(!species %in% to_remove)
+
+# Saving df as a text file
+write.table(df, "R_output/full_alignment/Data/sequence_data.txt", row.names = FALSE, sep = "\t", quote = FALSE)
+
+# Cleaning up
+# Removing unwanted variables
+rm(list = c("current_species", "current_sequence", "line", "lines", "species_list", "sequences_list"))
+# Garbage Collection = removing temporary memory
+invisible(gc()) # Invisible prevents it from showing output
+
+df
+
+```
+
+**The number of sequences analysed = `r nrow(df)`**
+
+# 3.Data Manipulation
+Given that the data set is currently large and contains lots of null values, I will not present any data tables in this section. I will instead display these tables when analysing the sequence corresponding specifically to human alpha-synuclein. **See section 5 onwards**.
+
+In order to compare the differences between each sequence, we need to separate the strings into one row per residue.
+
+```{r}
+
+# Seperating each residue 
+df$split <- strsplit(df$sequence,split="")
+
+# Removing sequence column as its no longer needed
+df.min <- subset(df, select = c("species", "split"))
+
+# Making species names the column names
+df.wide <- pivot_wider(df.min, names_from = species, values_from = split)
+
+# Seperating the list into individual rows
+data <- df.wide %>% unnest_longer(c(colnames(df.wide)))
+
+# Cleaning environment
+rm(list=setdiff(ls(), c("data", "df", "species_info")))
+invisible(gc())
+
+
+```
+
+Now that each row corresponds to a single position in the sequence, we can simply count the number of occurrences of each residue at each position.
+
+```{r}
+
+amino_acids <- c("A","G","I","L","P","V","F","W","Y","D",
+                 "E","R","H","K","S","T","C","M","N","Q")
+
+for (i in amino_acids) {
+  
+  x <- rowSums(data == i)                  # Counts the number of occurrences of the amino acid across the rows
+  data[ , ncol(data) + 1] <- x             # Append new column
+  colnames(data)[ncol(data)] <- paste(i)  # Rename column name
+  
+}
+
+# Saving data as a csv
+write.csv(data, "R_output/full_alignment/Data/sequences_and_counts.csv", row.names = FALSE)
+
+# Extracting only the counts from data
+residue_counts <- data[,(ncol(data)-19):ncol(data)]
+
+# Numbering the residues and adding it to data as the first column
+position <- seq(1,nrow(residue_counts),1)
+residue_counts <-cbind(position,residue_counts)
+
+
+# Saving residue_counts as a csv
+write.csv(residue_counts, "R_output/full_alignment/Data/residue_counts.csv", row.names = FALSE)
+
+# Cleaning environment
+rm(list=c("i", "x", "position", "amino_acids"))
+invisible(gc())
+
+```
+
+Now we can convert the resulting data frame into one that is more suitable for plotting
+
+```{r}
+# Making data into plot-ready
+
+plot.data <- residue_counts %>%
+               pivot_longer(!position, names_to = "residue", values_to = "count")
+
+plot.data <- plot.data[order(plot.data$position),] # ordering data by position (ascending order)
+
+```
+
+# 4.Plotting Residue Counts against Sequence Position
+To visualize the prevalence of each amino acid at each specific sequence location we can make a simple (yet very cluttered) bar-chart (@fig-whole-alignment).
+
+**NOTE** – I am aware this graph is near unreadable but the only takeaway you need is that throughout evolution there has been insertions and deletions of the sequence that lead to long stretches with low counts. This graph is simply used to justify trimming away the low conserved regions and focus only on the regions that correspond to human α-syn (@fig-min-alignment and @fig-min-alignment-property). 
+
+```{r}
+#| label: fig-whole-alignment
+#| fig-cap: | 
+#|   Is a stacked bar chart for counts of each amino acid at each position from the initial alignment. 
+#|   The dashed red line represents the number of sequences analysed and is therefore the maximum value 
+#|   any count can reach.
+#| column: screen-inset
+#| fig-width: 20
+#| fig-height: 6
+
+if (!require("ggplot2")) install.packages("ggplot2"); library("ggplot2")
+
+# Coloured by AA
+
+ggplot(data = plot.data, aes(x = position, y = count, fill = residue, group = count)) +
+  geom_bar(colour = "black", stat = "identity") +
+  theme_classic() +
+  ylab("Count") +
+  xlab("Residue") +
+  scale_y_continuous(breaks = seq(0,1000,50), expand = expansion(mult = c(0, 0.05))) +
+  scale_x_continuous(breaks = seq(0,nrow(data),10), expand = expansion(mult = c(0.01, 0.01))) +
+  theme(panel.grid.major = element_line(colour = "grey30", linewidth = 0.5, 
+                                          linetype = "dashed"),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(colour = "black", fill = NA, linewidth = 1.5),
+        plot.title = element_text(size = 20, face = "bold", colour = "black", hjust = 0.5),
+        axis.text.y = element_text(size = 20, colour = "black"),
+        axis.text.x = element_text(size = 20, colour = "black", angle = 90, hjust=1, vjust = 0.3),
+        axis.title=element_text(size = 25, face = "bold"),
+        axis.line.x = element_line(color="black", linewidth = 1.5),
+        axis.line.y = element_line(color="black", linewidth = 1.5),
+        legend.text = element_text(size = 15, face = "bold")) +
+  labs(fill = "") +
+  annotate(geom = "segment", x=0, xend = nrow(data), y=nrow(df), yend=nrow(df), 
+           linewidth = 1.5, colour = "red", linetype = "dashed")
+
+# Saving Plot
+ggsave(plot = last_plot(), filename = "R_output/full_alignment/Figures/counts_by_residue.png", width = 40, height = 15)
+
+# Cleaning Environment
+rm(list = c("plot.data", "residue_counts"))
+invisible(gc())
+
+```
+
+# 5.Removing regions not found in human alpha-synuclein
+The next step is to remove regions that are not found in the human sequence so we can simplify the analysis and focus on the regions that are most relevant.
+
+The 'trimmed' sequences containing only the 140 residues that were alinged to human alpha synuclein is presented in **Table 2**
+
+```{r}
+#| column: page
+
+# Finds the sequence labelled with Hsap (Homo Sapian)
+human_ensembl <- str_subset(df$species, "Hsap")
+
+# Filtering the sequence data to remove all rows where the human sequence is not found
+min_data <- data[data[human_ensembl] != "-",]
+
+# Replace "X" with "-" using dplyr
+min_data <- min_data %>% 
+              mutate(across(everything(), ~ifelse(. == "X", "-", .)))
+
+# Reads the human specific sequence
+full_human_sequence <- df$sequence[df$species == human_ensembl]
+
+# Removes gaps from full human sequence
+human_sequence <- gsub("-", "", full_human_sequence)
+
+# Saving min_data as a csv
+write.csv(min_data, "R_output/human_alignment/Data/sequences_and_counts.csv", row.names = FALSE)
+
+# Cleaning environment
+rm(list = c("full_human_sequence"))
+invisible(gc())
+
+min_data
+
+```
+
+```{r}
+
+# Converting min_data back into original df layout but with non-human regions removed
+
+# Removing 20 columns of amino acid counts
+min_data_no_counts <- min_data[,1:(ncol(min_data)-20)]
+# Extracting all the sequence names
+min_data_species <- colnames(min_data_no_counts)
+# 
+min_data_sequences <- apply(min_data_no_counts, 2, paste, collapse = "")
+
+# Creating a new dataframe the same as the original df with non-human regions removed
+min_df <- data.frame(species = min_data_species,
+                     sequence = min_data_sequences,
+                     row.names = NULL)
+
+# Saving min_df as a text file
+write.table(min_df, "R_output/human_alignment/Data/sequence_data.txt", row.names = FALSE, sep = "\t", quote = FALSE)
+
+# Cleaning Environment
+rm(list = c("min_data_no_counts", "min_data_species", "min_data_sequences"))
+
+```
+
+
+The number of occurrences of each specific amino acid in each of the 140 positions can then be counted. The resulting data is presented int **Table 3**
+
+```{r}
+#| column: page
+
+# Creating a seperate dataset containing only the count data
+residue_counts <- min_data[,(ncol(min_data)-19):ncol(min_data)]
+
+# Numbering the residues and adding it to data as the first column
+position <- seq(1,nrow(residue_counts),1)
+residue_counts <-cbind(position,residue_counts)
+
+# Saving residue_counts as a csv
+write.csv(residue_counts, "R_output/human_alignment/Data/residue_counts.csv", row.names = FALSE)
+
+# Cleaning environment
+rm(list=c("position"))
+invisible(gc())
+
+
+residue_counts
+
+```
+
+# 6.Plotting the residue counts for locations that map to human alpha synuclein
+As before, using the sequence postion and the residue count data, we can plot a bar graph to visualise the prevelance of each amino acid at each position of alpha-synuclein across `r nrow(df)` species.
+
+```{r}
+#| include: false
+
+# Making data into plot-ready
+plot.data <- residue_counts %>%
+               pivot_longer(!position, names_to = "residue", values_to = "count")
+
+plot.data <- plot.data[order(plot.data$position),] # ordering data by position (ascending order)
+
+```
+
+```{r}
+#| label: fig-min-alignment
+#| fig-cap: | 
+#|   A stacked bar chart displaying the number of counts of each amino acid at every position corresponding 
+#|   to human α-synuclein. Bars are coloured according to the specific amino acid counted. The dashed red line
+#|   represents the number of sequences analysed and is therefore the maximum value any count can reach. 
+#|   No bar reached the red line meaning that no single position, regardless of the amino acid present, was
+#|   found common across all species.
+#| column: screen-inset
+#| fig-width: 20
+#| fig-height: 6
+
+
+if (!require("ggplot2")) install.packages("ggplot2"); library("ggplot2")
+
+# Min Alignment Plotting
+# Coloured by AA
+
+ggplot(data = plot.data, aes(x = position, y = count, fill = residue, group = count)) +
+  geom_bar(colour = "black", stat = "identity") +
+  theme_classic() +
+  ylab("Count") +
+  xlab("Residue") +
+  scale_y_continuous(breaks = seq(0,1000,50), expand = expansion(mult = c(0, 0.05))) +
+  scale_x_continuous(breaks = seq(0,nrow(residue_counts),10), expand = expansion(mult = c(0.01, 0.01))) +
+  theme(panel.grid.major = element_line(colour = "grey30", linewidth = 0.5, 
+                                          linetype = "dashed"),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(colour = "black", fill = NA, linewidth = 1.5),
+        plot.title = element_text(size = 20, face = "bold", colour = "black", hjust = 0.5),
+        axis.text.y = element_text(size = 18, colour = "black"),
+        axis.text.x = element_text(size = 18, colour = "black", angle = 90, hjust=1, vjust = 0.3),
+        axis.title=element_text(size = 20, face = "bold"),
+        axis.line.x = element_line(color="black", linewidth = 1.5),
+        axis.line.y = element_line(color="black", linewidth = 1.5),
+        legend.text = element_text(size = 15, face = "bold")) +
+  labs(fill = "") +
+  annotate(geom = "segment", x=0, xend = nrow(residue_counts), y=nrow(df), yend=nrow(df), 
+           linewidth = 1.5, colour = "red", linetype = "dashed") +
+  annotate(geom = "segment", x=0, xend = nrow(residue_counts), y=nrow(df)/2, yend=nrow(df)/2, 
+           linewidth = 1.5, colour = "black", linetype = "dashed")
+
+# Saving plot
+ggsave(plot = last_plot(), filename = "R_output/human_alignment/Figures/counts_by_residue.png", width = 20, height = 8)
+
+```
+
+While this plot is very pretty and informative it can be a little overwhealming and hard to interpret, so, I grouped the 20 amino acids by their properties to reduce the labelling to fewer groups for ease of reading. If any particular sequence positions are of particular interest you can refer back to @fig-min-alignment to figure out exactly which amino acid has changed and to what.
+
+To do this, we need to assign a property to the different amino acids. The properties I assigned were as follows:
+
+**Hydrophobic** = Alanine, Valine, Isoleucine, Leucine, Methionine and Glycine
+
+**Aromatic** = Phenylalanine, Tryptophan and Tyrosine 
+
+**Positive** = Arginine, Lysine and Histidine
+
+**Negative** = Aspartic acid and Glutamic acid
+
+**Polar** = Asparagine, Serine, Threonine and Glutamine
+
+Also two special cases: **Proline** and **Cysteine**
+
+
+```{r}
+# Creating an empty column to assign properties to in the for loop
+plot.data$property <- NA
+
+for (i in 1:length(plot.data$residue)) {
+  
+  # Assigning Hydrophobic Residues
+  for (j in c("A", "V", "I", "L", "M", "G")) {
+    if (plot.data$residue[i] == j) {
+        plot.data$property[i] <- "Hydrophobic"
+    }
+  }
+  # Assigning Aromatic Residues
+  for (j in c("F", "W", "Y")) {
+    if (plot.data$residue[i] == j) {
+        plot.data$property[i] <- "Aromatic"
+    }
+  }
+  # Assigning Positive Residues
+  for (j in c("R", "K", "H")) {
+    if (plot.data$residue[i] == j) {
+        plot.data$property[i] <- "Positive"
+    }
+  }
+  # Assigning Negative Residues
+  for (j in c("D", "E")) {
+    if (plot.data$residue[i] == j) {
+        plot.data$property[i] <- "Negative"
+    }
+  }
+  # Assigning Polar Residues
+  for (j in c("N", "S", "T", "Q")) {
+    if (plot.data$residue[i] == j) {
+        plot.data$property[i] <- "Polar"
+    }
+  }
+  
+  ### Special Cases ###
+  
+  # Assigning Proline 
+  for (j in c("P")) {
+    if (plot.data$residue[i] == j) {
+        plot.data$property[i] <- "Proline"
+    }
+  }
+  # Assigning Cysteine 
+  for (j in c("C")) {
+    if (plot.data$residue[i] == j) {
+        plot.data$property[i] <- "Cysteine"
+    }
+  }
+  
+}
+
+property_fill <- c(Aromatic = "darkgreen", Hydrophobic = "gold3", Positive = "tomato2", Negative = "deepskyblue3", 
+             Polar = "purple", Proline = "grey30", Cysteine = "white")
+
+# Cleaning Environment
+rm(list = c("i", "j"))
+invisible(gc())
+
+```
+
+```{r}
+#| label: fig-min-alignment-property
+#| fig-cap: | 
+#|   A stacked bar chart displaying the number of counts of each amino acid at every position corresponding to human α-synuclein. Bars are coloured according to the property of the respective amino acid counted. Aromatic = F, W and Y; Hydrophobic = A, V, I, L, M and G; Polar = N, S, T and Q; Positive = R, K and H; Negative = D and E. The dashed red line represents the number of sequences analysed and is therefore the maximum value any count can reach. The black dashed line represents 50% of the number of sequences analysed. If one continuous section of the stacked bars pass this line, they are included in the over 50% consensus sequence.
+#| column: screen-inset
+#| fig-width: 20
+#| fig-height: 6
+
+
+# Coloured by AA Properties
+
+ggplot(data = plot.data, aes(x = position, y = count, fill = property, group = count)) +
+  geom_bar(colour = "black", stat = "identity") +
+  scale_fill_manual(values = property_fill) +
+  theme_classic() +
+  ylab("Count") +
+  xlab("Residue") +
+  scale_y_continuous(breaks = seq(0,1000,50), expand = expansion(mult = c(0, 0.05))) +
+  scale_x_continuous(breaks = seq(0,nrow(residue_counts),10), expand = expansion(mult = c(0.01, 0.01))) +
+  #ggtitle(paste(i)) +
+  theme(panel.grid.major = element_line(colour = "grey30", linewidth = 0.5, 
+                                          linetype = "dashed"),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(colour = "black", fill = NA, linewidth = 1.5),
+        plot.title = element_text(size = 20, face = "bold", colour = "black", hjust = 0.5),
+        axis.text.y = element_text(size = 18, colour = "black"),
+        axis.text.x = element_text(size = 18, colour = "black", angle = 90, hjust=1, vjust = 0.3),
+        axis.title=element_text(size = 20, face = "bold"),
+        axis.line.x = element_line(color="black", linewidth = 1.5),
+        axis.line.y = element_line(color="black", linewidth = 1.5),
+        legend.text = element_text(size = 15, face = "bold")) +
+  labs(fill = "") +
+  annotate(geom = "segment", x=0, xend = nrow(residue_counts), y=nrow(df), yend=nrow(df), 
+           linewidth = 1.5, colour = "red", linetype = "dashed") +
+  annotate(geom = "segment", x=0, xend = nrow(residue_counts), y=nrow(df)/2, yend=nrow(df)/2, 
+           linewidth = 1.5, colour = "black", linetype = "dashed")
+
+# Saving Plot
+ggsave(plot = last_plot(), filename = "R_output/human_alignment/Figures/counts_by_property.png", width = 20, height = 8)
+
+
+```
+
+# 7.Analysing P2 region
+
+It can be seen from @fig-min-alignment and @fig-min-alignment-property that there is a small region in the N-terminus that is missing from a non-trivial number of sequences (as shown by the distance from the dashed red line) in an otherwise highly conserved region. This region falls within the P2 region of alpha-syn (45-57) which has been shown to modulate aggregation propensity.
+
+```{r}
+#| label: fig-p2-missing
+#| fig-cap: | 
+#|   Analysis of sequences containing missing residues within the P2 region. Bar charts displaying the number of sequences missing a given P2 residue.
+#| column: page
+#| fig-width: 20
+#| fig-height: 6
+
+# Creating a data set containing only positions corresponding to P2 (45-57)
+only_p2 <- min_data[45:57,]
+# Removing the amino acid counts
+only_p2_no_counts <- only_p2[1:nrow(df)]
+
+# Creating a new data frame to select sequences missing part of P2
+missing_p2 <- data.frame(position = seq(45,57,1))
+
+for (i in colnames(only_p2_no_counts)) {
+  # Only adds sequences that have "-" within P2 region  
+  if ("-" %in% only_p2_no_counts[[i]] == TRUE)
+    
+    missing_p2 <- cbind(missing_p2, only_p2_no_counts[i])
+}
+
+# Counting the number of gaps at each position
+missing_p2$gaps <- rowSums(missing_p2 == "-") # Counts the number of occurrences of "-" across the rows
+
+# Saving missing_p2 as a csv
+write.csv(missing_p2, "R_output/P2/Data/sequences_missing_p2.csv", row.names = FALSE)
+
+
+# Plotting num. missing at each position
+
+ggplot(data = missing_p2, aes(x = position, y = gaps)) +
+  geom_bar(colour = "black", stat = "identity") +
+  theme_classic() +
+  ylab("Num. Sequences Missing This Residue") +
+  xlab("Residues") +
+  scale_y_continuous(breaks = seq(0,100,5), expand = expansion(mult = c(0, 0.05))) +
+  scale_x_continuous(breaks = seq(min(missing_p2$position),max(missing_p2$position),1), 
+                     expand = expansion(mult = c(0.01, 0.01))) +
+  theme(panel.grid.major = element_line(colour = "grey30", linewidth = 0.5, 
+                                          linetype = "dashed"),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(colour = "black", fill = NA, linewidth = 1.5),
+        plot.title = element_text(size = 20, face = "bold", colour = "black", hjust = 0.5),
+        axis.text.y = element_text(size = 18, colour = "black"),
+        axis.text.x = element_text(size = 18, colour = "black", angle = 90, hjust=1, vjust = 0.3),
+        axis.title=element_text(size = 20, face = "bold"),
+        axis.line.x = element_line(color="black", linewidth = 1.5),
+        axis.line.y = element_line(color="black", linewidth = 1.5),
+        legend.text = element_text(size = 15, face = "bold")) 
+
+# Saving Plot
+ggsave(plot = last_plot(), filename = "R_output/P2/Figures/gaps_vs_position.png", width = 10, height = 6)
+
+
+# Cleaning Environment
+rm(list = c("only_p2", "only_p2_no_counts", "i"))
+invisible(gc())
+
+```
+
+After plotting the number of times a P2 residue is missing from all `r nrow(df)` sequences (@fig-p2-missing) we can see that the residues 47-50 are the least conserved.
+
+
+```{r}
+#| label: fig-p2-num-missing
+#| fig-cap: | 
+#|   Analysis of sequences containing missing residues within the P2 region. Displays the number of missing P2 residues per sequence. Black dots represent sequences that are missing all 4 residues 47-50. Red dots represent sequences that are missing 3 or less residues between 47-50.
+#| column: screen-inset
+#| fig-width: 20
+#| fig-height: 6
+
+# Counting the number of missing P2 residues per sequence
+
+# Variable to store counts
+num_missing <- c()
+
+# Counting the number of times "-" is found per row i.e. each residue  
+for (i in 2:(ncol(missing_p2)-1)) {
+  
+  x <- length(which(missing_p2[[i]] == "-"))
+  
+  num_missing <- append(num_missing, x)
+  
+}
+# Extracting sequence names
+sequence_names <- colnames(missing_p2[2:(ncol(missing_p2)-1)])
+
+# Assigning colour if 47-50 are all missing 
+missing_47_50 <- c()
+
+for (i in 2:(ncol(missing_p2)-1)) {
+  
+  if (length(which(missing_p2[[i]][3:6] == "-")) == 4){
+    
+    missing_47_50 <- append(missing_47_50, "Yes")
+  }
+  else {
+    missing_47_50 <- append(missing_47_50, "No")
+  }
+
+}
+
+# Creating a data frame with the sequence name and the number of p2 residues missing
+p2_num_missing <- data.frame(sequence = sequence_names,
+                             num_missing = num_missing,
+                             missing_47_50 = missing_47_50)
+
+p2_num_missing$missing_47_50 <- factor(p2_num_missing$missing_47_50, levels = c("Yes", "No"))
+
+
+# Saving p2_num_missing as a csv
+write.csv(p2_num_missing, "R_output/P2/Data/num_missing_from_p2.csv", row.names = FALSE)
+
+
+# Plotting
+ggplot(p2_num_missing, aes(x = reorder(sequence, num_missing), y = num_missing, colour = missing_47_50)) +
+  geom_point(size = 4) +
+  theme_classic() +
+  xlab("Sequence") +
+  ylab("Num. P2 Residues Missing") +
+  scale_y_continuous(breaks = seq(0,13,1)) +
+  scale_colour_manual(values = c("black", "red")) +
+  theme(panel.grid.major = element_line(colour = "grey30", linewidth = 0.5, 
+                                          linetype = "dashed"),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(colour = "black", fill = NA, linewidth = 1.5),
+        plot.title = element_text(size = 14, face = "bold", colour = "black", hjust = 0.5),
+        axis.text.y = element_text(size = 10, colour = "black"),
+        axis.text.x = element_text(size = 8, colour = "black", angle = 90, hjust=1, vjust = 0.3),
+        axis.title = element_text(size = 14, face = "bold"),
+        axis.line.x = element_line(color="black", linewidth = 1.5),
+        axis.line.y = element_line(color="black", linewidth = 1.5)) +
+  labs(colour = "Missing 47-50?")
+
+# Saving Plot
+ggsave(plot = last_plot(), filename = "R_output/P2/Figures/num_missing_per_sequence.png", width = 10, height = 6)
+
+# Cleaning Environment
+rm(list = c("sequence_names", "missing_47_50", "i", "x", "num_missing"))
+
+```
+
+After filtering sequences that contained missing residues within the P2 region (45-57), @fig-p2-num-missing quantifies how many of the 13 residues that make up P2 are lost in each sequence. As shown in @fig-p2-missing, sequences that are missing the entire 47-50 region are coloured in red.
+
+# 8.Analysing Full Sequences of Those Missing 47-50
+
+Here we repeat counting the number of occurences of each amino acid at a given position but focusing solely on the `r length(which(p2_num_missing$missing_47_50 == "Yes"))`` sequences missing the entire 47-50 region.
+
+```{r}
+
+# Extract sequence names of those missing all 47-50
+del_47_50 <- p2_num_missing %>% filter(missing_47_50 == "Yes")
+
+# Select columns from min_data for sequences missing all of 47-50
+min_data_del_47_50 <- min_data %>% select(del_47_50$sequence)
+
+# Repeat residue counting for this subset of sequences
+
+amino_acids <- c("A","G","I","L","P","V","F","W","Y","D",
+                 "E","R","H","K","S","T","C","M","N","Q")
+
+for (i in amino_acids) {
+  
+  x <- rowSums(min_data_del_47_50 == i)  # Counts the number of occurrences of the amino acid across the rows
+  min_data_del_47_50[ , ncol(min_data_del_47_50) + 1] <- x  # Append new column
+  colnames(min_data_del_47_50)[ncol(min_data_del_47_50)] <- paste(i)  # Rename column name
+  
+}
+
+# Saving data as a csv
+write.csv(min_data_del_47_50, "R_output/P2/Data/P2_del_sequences_and_counts.csv", row.names = FALSE)
+
+# Extracting only the counts from min_data_del_47_50
+residue_counts <- min_data_del_47_50[,(ncol(min_data_del_47_50)-19):ncol(min_data_del_47_50)]
+
+# Numbering the residues and adding it to data as the first column
+position <- seq(1,nrow(residue_counts),1)
+residue_counts <-cbind(position,residue_counts)
+
+
+# Saving residue_counts as a csv
+write.csv(residue_counts, "R_output/P2/Data/residue_counts.csv", row.names = FALSE)
+
+# Cleaning environment
+rm(list=c("i", "x", "position", "amino_acids"))
+invisible(gc())
+
+```
+
+```{r}
+#| include: false
+
+# Making data into plot-ready
+p2.plot.data <- residue_counts %>%
+                pivot_longer(!position, names_to = "residue", values_to = "count")
+
+p2.plot.data <- p2.plot.data[order(p2.plot.data$position),] # ordering data by position (ascending order)
+
+```
+
+```{r}
+#| label: fig-P2-deletion-counts
+#| fig-cap: | 
+#|   A stacked bar chart displaying the number of counts of each amino acid at every position corresponding 
+#|   to human α-synuclein for sequences missing residues 47-50. Bars are coloured according to the specific 
+#|   amino acid counted. The dashed red line represents the number of sequences analysed and is therefore 
+#|   the maximum value any count can reach. No bar reached the red line meaning that no single position,
+#|   regardless of the amino acid present, was found common across all species.
+#| column: screen-inset
+#| fig-width: 20
+#| fig-height: 6
+
+
+if (!require("ggplot2")) install.packages("ggplot2"); library("ggplot2")
+
+# Min Alignment Plotting
+# Coloured by AA
+
+ggplot(data = p2.plot.data, aes(x = position, y = count, fill = residue, group = count)) +
+  geom_bar(colour = "black", stat = "identity") +
+  theme_classic() +
+  ylab("Count") +
+  xlab("Residue") +
+  scale_y_continuous(breaks = seq(0,1000,5), expand = expansion(mult = c(0, 0.05))) +
+  scale_x_continuous(breaks = seq(0,nrow(residue_counts),10), expand = expansion(mult = c(0.01, 0.01))) +
+  theme(panel.grid.major = element_line(colour = "grey30", linewidth = 0.5, 
+                                          linetype = "dashed"),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(colour = "black", fill = NA, linewidth = 1.5),
+        plot.title = element_text(size = 20, face = "bold", colour = "black", hjust = 0.5),
+        axis.text.y = element_text(size = 18, colour = "black"),
+        axis.text.x = element_text(size = 18, colour = "black", angle = 90, hjust=1, vjust = 0.3),
+        axis.title=element_text(size = 20, face = "bold"),
+        axis.line.x = element_line(color="black", linewidth = 1.5),
+        axis.line.y = element_line(color="black", linewidth = 1.5),
+        legend.text = element_text(size = 15, face = "bold")) +
+  labs(fill = "") +
+  annotate(geom = "segment", x=0, xend = nrow(residue_counts), y=nrow(p2_num_missing), 
+           yend=nrow(p2_num_missing), linewidth = 1.5, colour = "red", linetype = "dashed") +
+  annotate(geom = "segment", x=0, xend = nrow(residue_counts), y=nrow(p2_num_missing)/2,
+           yend=nrow(p2_num_missing)/2, linewidth = 1.5, colour = "black", linetype = "dashed")
+
+# Saving plot
+ggsave(plot = last_plot(), filename = "R_output/P2/Figures/del_47_50_counts_by_residue.png", 
+       width = 20, height = 8)
+
+
+# Cleaning Environment
+rm(list = c("p2.plot.data", "del_47_50", "missing_p2", "p2_num_missing"))
+invisible(gc())
+
+```
+
+# 9.Evolutionary Perspective
+@fig-min-alignment and @fig-min-alignment-property are great at providing insights into which residues are conserved across `r nrow(df)` the analysed species compared to humans. However, information on which species is the closest relation and which are the most distant is lost in this analysis. To address this, I calculated the Levenshtein distance for each species (@fig-levenshtein-dist) thereby ordering the species based on their sequence similarity to human α-syn. 
+
+Levenshtein distance is a measure of the distance between two strings (i.e. sequences in our case). For example:
+
+cat -> ca**R** = 1
+
+cat -> **SI**t = 2
+
+cat -> **DOG** = 3
+
+Therefore, the maximum Levenshtein distance value for sequence relatedness to human alpha-synuclein would be 140 (i.e. no conservation) as it has 140 residues.
+
+```{r}
+#| message: false
+
+# Levenshtein Distance Plot 
+
+# human_ensembl and human_sequence are defined in section 5, in the chunk spanning lines 247-271
+
+##################################################################################################
+
+# Creates a new data frame consisting of only the sequence and species columns from df
+levenshtein_data <- subset(min_df, select = c("sequence", "species"))
+
+# Extracts the genus and species name from the Ensembl ID e.g. "Hsap" for Homo sapians
+levenshtein_data <- levenshtein_data %>%
+                      # Matches string between last _ to /
+                      mutate(taxonomy = str_extract(species, "(?:.(?<!\\_))+(?=/)")) %>%
+                      # Extracting ENS ID to solve identical taxonomy names
+                      mutate(ens_id = str_extract(species, "ENS\\p{L}{3}"))
+
+# Extracts the protein length from the Ensembl ID and converts it to a numeric value
+levenshtein_data <- levenshtein_data %>%
+                      mutate(protein_length = str_extract(species, "(?<=1-)(.*)"))
+
+levenshtein_data$protein_length <- as.numeric(levenshtein_data$protein_length)
+
+#####################################
+
+for (j in 1:length(df$sequence)) {
+  # Calculating Levenshtein Distance compared to the human sequence, one species at a time
+  levenshtein_data$similarity[j] <- adist(human_sequence, levenshtein_data$sequence[j])
+  
+  # Levenshtein Distance = the minimum number of single-character edits (insertions, deletions or substitutions) required to change one word into the other
+}
+
+# Weighted levenshtein distance, diff = 1, diff AA type = + 1 and gap = + 2
+
+levenshtein_data$weighted_similarity <- levenshtein_data$similarity
+
+# Defining AA properties
+aa_property <- data.frame(amino_acid = c("A","V","I","L","M","G","C","P",
+                                         "F","W","Y",
+                                         "R","K","H",
+                                         "D","E",
+                                         "N","S","T","Q"
+                                         ),
+                          property = c("H","H","H","H","H","H","H","H", #Hydrophobic
+                                       "A","A","A",                     # Aromatic
+                                       "+","+","+",                     # Positive Charge
+                                       "-","-",                         # Negative Charged
+                                       "P","P","P","P"))                # Polar
+
+                                        
+                          
+for (i in 1:nrow(levenshtein_data)) {
+  for (j in 1:nchar(human_sequence)) {
+    
+    if (substr(levenshtein_data$sequence[i], j, j) == "-") {
+      levenshtein_data$weighted_similarity[i] = levenshtein_data$weighted_similarity[i] + 2
+    }
+    
+    if (substr(levenshtein_data$sequence[i], j, j) != substr(human_sequence, j, j) &
+        substr(levenshtein_data$sequence[i], j, j) != "-") {
+      
+      #print(paste0(substr(human_sequence, j, j), "/", substr(levenshtein_data$sequence[i], j, j)))
+      
+      human_AA <- substr(human_sequence, j, j)
+      human_AA_property <- aa_property$property[aa_property$amino_acid == human_AA]
+      
+      variant_AA <- substr(levenshtein_data$sequence[i], j, j)
+      variant_AA_property <- aa_property$property[aa_property$amino_acid == variant_AA]
+      
+      if (human_AA_property != variant_AA_property) {
+        
+        levenshtein_data$weighted_similarity[i] = levenshtein_data$weighted_similarity[i] + 1
+        
+      }
+    }
+  }
+}
+
+# Using BLOSUM75 to score amino acid similarity and give the sequences a similarity score
+
+# Importing BLOSUM75
+blosum75 <- read_table("BLOSUM75.txt", skip = 6)
+names(blosum75)[names(blosum75) == "#"] <- "reference"
+blosum75 <- blosum75 %>% pivot_longer(!reference, names_to = "variant", values_to = "blosum_score")
+
+# Initialising column
+levenshtein_data$blosum_score <- 0
+
+for (i in 1:nrow(levenshtein_data)) {
+  for (j in 1:nchar(human_sequence)) {
+    
+    if (substr(levenshtein_data$sequence[i], j, j) == "-") {
+      levenshtein_data$blosum_score[i] = levenshtein_data$blosum_score[i] + min(blosum75$blosum_score)
+    } else {
+      
+    human_AA <- substr(human_sequence, j, j)
+    variant_AA <- substr(levenshtein_data$sequence[i], j, j)
+    
+    current_score <- blosum75$blosum_score[blosum75$reference == human_AA & blosum75$variant == variant_AA]
+    
+    levenshtein_data$blosum_score[i] = levenshtein_data$blosum_score[i] + current_score 
+      
+    }
+  }
+}
+
+##################################################################
+
+# Using the species info dataset to convert from Genus species abbreviation to common names
+# Import
+species_info <- read_csv("SNCA_Ortholog_ENSG00000145335.csv") 
+# Select first two columns
+#species_info <- species_info[,c(1,2)]
+
+# Remove duplicates based on Species column
+species_info <- species_info[!duplicated(species_info$Species), ]
+
+# Using regex to extract the common name, scientific name and taxonomy (shorthand e.g. Hsap, used to match levenshtein data)
+species_info <- species_info %>% 
+                    mutate(common_name = str_extract(Species, ".*(?=\\()")) %>% 
+                      mutate(scientific_name = str_extract(Species, "(?<=\\()(.*)(?=\\))")) %>%
+                       mutate(taxonomy = paste(str_extract(scientific_name, "([A-Z])"),
+                                               str_extract(scientific_name, "(?<=\\s)(.{3})"), 
+                                               sep="")) %>%
+                         mutate(ens_id_match = str_extract(Orthologue, "ENS\\p{L}{3}"))
+
+##################################################################################################
+# This code needs fixing as some sequences have the same taxonomy despite being different species 
+#e.g. dog and dingo == Clup
+##################################################################################################
+
+# Merging the data via taxonomy ("Hsap")
+#lev_plot_data <- merge(levenshtein_data, species_info, by = c("taxonomy"))
+
+# Using ens_id/orthologue to solve identical taxonomy discrepancies
+#lev_plot_data <- subset(lev_plot_data, lev_plot_data$ens_id == lev_plot_data$ens_id_match)
+
+# Ordering the data by ascending similarity a.k.a Levenshtein distance
+#lev_plot_data <- lev_plot_data[order(lev_plot_data$similarity, lev_plot_data$common_name),]
+
+lev_plot_data <- levenshtein_data
+
+lev_plot_data$common_name <- lev_plot_data$taxonomy
+
+for (i in 1:nrow(lev_plot_data)) {
+  
+  for(j in 1:nrow(species_info)) {
+
+    if (!is.na(lev_plot_data$ens_id[i]) && !is.na(species_info$ens_id_match[j]) &&
+        lev_plot_data$ens_id[i] == species_info$ens_id_match[j]) {
+      
+      
+      lev_plot_data$common_name[i] <- species_info$common_name[j]
+        
+    }
+  }
+}
+
+# Cleaning Environment 
+rm(list = c("j", "i", "species_info", "levenshtein_data", "aa_property", 
+            "human_AA", "human_AA_property", "variant_AA", "variant_AA_property"))
+invisible(gc())
+
+```
+
+
+```{r}
+#| label: fig-levenshtein-dist
+#| fig-cap: | 
+#|   Shows the Levenshtein distance for each species compared to human α-syn. A value of 0 corresponds to a sequence identical to the human sequence and a value of 140 would be given to a sequence with no conserved residues.
+#| column: screen-inset
+#| fig-width: 20
+#| fig-height: 8
+
+# Plotting Levenshtein Distance
+ggplot(data = lev_plot_data, aes(x = reorder(species, similarity), y = similarity)) +
+  geom_point(size = 3, ) +
+  theme_classic()+
+  ylab("Levenshtein Distance") +
+  xlab("Species") +
+  scale_y_continuous(breaks = seq(0,nrow(min_data),10)) +
+  scale_x_discrete(labels = lev_plot_data$common_name) +
+  theme(panel.grid.major = element_line(colour = "grey30", linewidth = 0.2, 
+                                          linetype = "dashed"),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(colour = "black", fill = NA, linewidth = 1.5),
+        plot.title = element_text(size = 20, face = "bold", colour = "black", hjust = 0.5),
+        axis.text.y = element_text(size = 12, colour = "black"),
+        axis.text.x = element_text(size = 8, colour = "black", angle = 90, hjust = 1, vjust = 0.4),
+        axis.title=element_text(size = 25, face = "bold"),
+        axis.line.x = element_line(color="black", linewidth = 1.5),
+        axis.line.y = element_line(color="black", linewidth = 1.5),
+        legend.position = "none") +
+  annotate(geom = "segment", x=0, xend = length(unique(lev_plot_data$species)), y=0, yend=0, 
+           linewidth = 1, colour = "grey", linetype = "solid")
+
+# Saving Plot
+ggsave(plot = last_plot(), filename = "R_output/human_alignment/Figures/levenshtein_distance.png", 
+       width = 27, height = 10)
+
+
+# Plotting Weighted Levenshtein Distance
+
+ggplot(data = lev_plot_data, aes(x = reorder(species, weighted_similarity), y = weighted_similarity)) +
+  geom_point(size = 4, ) +
+  theme_classic()+
+  ylab("Weighted Levenshtein Distance") +
+  xlab("Species") +
+  scale_y_continuous(breaks = seq(0,9999999,10)) +
+  scale_x_discrete(labels = lev_plot_data$common_name) +
+  theme(panel.grid.major = element_line(colour = "grey30", linewidth = 0.2, 
+                                          linetype = "dashed"),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(colour = "black", fill = NA, linewidth = 1.5),
+        plot.title = element_text(size = 20, face = "bold", colour = "black", hjust = 0.5),
+        axis.text.y = element_text(size = 12, colour = "black"),
+        axis.text.x = element_text(size = 14, colour = "black", angle = 90, hjust = 1, vjust = 0.4),
+        axis.title=element_text(size = 25, face = "bold"),
+        axis.line.x = element_line(color="black", linewidth = 1.5),
+        axis.line.y = element_line(color="black", linewidth = 1.5),
+        legend.position = "none")
+  
+
+# Saving Plot
+ggsave(plot = last_plot(), filename = "R_output/human_alignment/Figures/levenshtein_distance_weighted.png",
+       width = 27, height = 10)
+
+# Plotting Blosum Score
+
+ggplot(data = lev_plot_data, aes(x = reorder(species, -blosum_score), y = blosum_score)) +
+  geom_point(size = 3, ) +
+  theme_classic()+
+  ylab("BLOSUM75 Score") +
+  xlab("Species") +
+  scale_y_continuous(breaks = seq(0,9999999,50)) +
+  scale_x_discrete(labels = lev_plot_data$common_name) +
+  theme(panel.grid.major = element_line(colour = "grey30", linewidth = 0.2, 
+                                          linetype = "dashed"),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(colour = "black", fill = NA, linewidth = 1.5),
+        plot.title = element_text(size = 20, face = "bold", colour = "black", hjust = 0.5),
+        axis.text.y = element_text(size = 12, colour = "black"),
+        axis.text.x = element_text(size = 8, colour = "black", angle = 90, hjust = 1, vjust = 0.4),
+        axis.title=element_text(size = 25, face = "bold"),
+        axis.line.x = element_line(color="black", linewidth = 1.5),
+        axis.line.y = element_line(color="black", linewidth = 1.5),
+        legend.position = "none")
+  
+
+# Saving Plot
+ggsave(plot = last_plot(), filename = "R_output/human_alignment/Figures/BLOSUM75_score.png",
+       width = 27, height = 10)
+
+
+```
+
+## Colouring Levenshtein Distance Plot By Missing 47-50 
+
+In order to determine the evolutionary significance of the residues at 47-50, the sequences that are missing all 4 residues are coloured in red.
+
+```{r}
+#| label: fig-levenshtein-dist-p2
+#| fig-cap: | 
+#|   Shows the Levenshtein distance for each species compared to human α-syn. A value of 0 corresponds to a sequence identical to the human sequence and a value of 140 would be given to a sequence with no conserved residues. Dots are coloured red if the residues 47-50 are all missing from the respective sequence.
+#| column: screen-inset
+#| fig-width: 20
+#| fig-height: 8
+
+
+# Adding column to denote if species is missing 47-50
+
+# Setting column initially to No (not missing 47-50)
+lev_plot_data$del_47_50 <- "No"
+# Getting list of species that ARE MISSING 47-50
+species_missing_47_50 <- colnames(min_data_del_47_50[1:(ncol(min_data_del_47_50)-20)])
+
+# Looping through each row and the list of species missing 47-50
+# If the species name of the current row is in the list of species missing 47-50, set lev_plot_data$del_47_50 = "Yes"
+for (i in 1:nrow(lev_plot_data)) {
+  for (j in species_missing_47_50) {
+  
+    if (lev_plot_data$species[i] == j) {
+     
+      lev_plot_data$del_47_50[i] <- "Yes"
+      
+    }
+  }
+}
+
+# Setting legend order so that Yes is first
+lev_plot_data$del_47_50 <- factor(lev_plot_data$del_47_50, levels = c("Yes", "No"))
+
+# Plotting Levenshtein Distance
+ggplot(data = lev_plot_data, aes(x = reorder(common_name, similarity), y = similarity, 
+                                 colour = del_47_50)) +
+  geom_point(size = 3) +
+  theme_classic()+
+  ylab("Levenshtein Distance") +
+  xlab("Species") +
+  scale_y_continuous(breaks = seq(0,nrow(min_data),10)) +
+  scale_colour_manual(values = c("tomato2", "black")) + 
+  theme(panel.grid.major = element_line(colour = "grey30", linewidth = 0.2, 
+                                          linetype = "dashed"),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(colour = "black", fill = NA, linewidth = 1.5),
+        axis.line.x = element_line(color="black", linewidth = 1.5),
+        axis.line.y = element_line(color="black", linewidth = 1.5),
+        plot.title = element_text(size = 20, face = "bold", colour = "black", hjust = 0.5),
+        axis.text.y = element_text(size = 12, colour = "black"),
+        axis.text.x = element_text(size = 14, colour = "black", angle = 90, hjust = 1, vjust = 0.4),
+        axis.title=element_text(size = 25, face = "bold"),
+        legend.title = element_text(size = 16, face = "bold"),
+        legend.text = element_text(size = 14)) +
+  labs(colour = "Missing 47-50?")
+
+# Saving Plot
+ggsave(plot = last_plot(), filename = "R_output/human_alignment/Figures/levenshtein_distance_missing_47-50.png", 
+       width = 27, height = 10)
+
+# Plotting Weighted Levenshtein Distance
+
+ggplot(data = lev_plot_data, aes(x = reorder(common_name, weighted_similarity), y = weighted_similarity, 
+                                 colour = del_47_50)) +
+  geom_point(size = 3) +
+  theme_classic()+
+  ylab("Weighted Levenshtein Distance") +
+  xlab("Species") +
+  scale_y_continuous(breaks = seq(0,99999,10)) +
+  scale_colour_manual(values = c("tomato2", "black")) + 
+  theme(panel.grid.major = element_line(colour = "grey30", linewidth = 0.2, 
+                                          linetype = "dashed"),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(colour = "black", fill = NA, linewidth = 1.5),
+        plot.title = element_text(size = 20, face = "bold", colour = "black", hjust = 0.5),
+        axis.text.y = element_text(size = 12, colour = "black"),
+        axis.text.x = element_text(size = 14, colour = "black", angle = 90, hjust = 1, vjust = 0.4),
+        axis.title=element_text(size = 25, face = "bold"),
+        axis.line.x = element_line(color="black", linewidth = 1.5),
+        axis.line.y = element_line(color="black", linewidth = 1.5),
+        legend.title = element_text(size = 16, face = "bold"),
+        legend.text = element_text(size = 14)) +
+  labs(colour = "Missing 47-50?")
+
+# Saving Plot
+ggsave(plot = last_plot(), filename = "R_output/human_alignment/Figures/levenshtein_distance_weighted_missing_47-50.png", 
+       width = 27, height = 10)
+
+
+# Plotting BLOSUM75 Score
+
+ggplot(data = lev_plot_data, aes(x = reorder(common_name, -blosum_score), y = blosum_score, 
+                                 colour = del_47_50)) +
+  geom_point(size = 3) +
+  theme_classic()+
+  ylab("BLOSUM75 Score") +
+  xlab("Species") +
+  scale_y_continuous(breaks = seq(0,99999,50)) +
+  scale_colour_manual(values = c("tomato2", "black")) + 
+  theme(panel.grid.major = element_line(colour = "grey30", linewidth = 0.2, 
+                                          linetype = "dashed"),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(colour = "black", fill = NA, linewidth = 1.5),
+        plot.title = element_text(size = 20, face = "bold", colour = "black", hjust = 0.5),
+        axis.text.y = element_text(size = 12, colour = "black"),
+        axis.text.x = element_text(size = 14, colour = "black", angle = 90, hjust = 1, vjust = 0.4),
+        axis.title=element_text(size = 25, face = "bold"),
+        axis.line.x = element_line(color="black", linewidth = 1.5),
+        axis.line.y = element_line(color="black", linewidth = 1.5),
+        legend.title = element_text(size = 16, face = "bold"),
+        legend.text = element_text(size = 14)) +
+  labs(colour = "Missing 47-50?")
+
+# Saving Plot
+ggsave(plot = last_plot(), filename = "R_output/human_alignment/Figures/BLOSUM75_score_missing_47-50.png", 
+       width = 27, height = 10)
+
+# Cleaning Environment
+rm(list = c("species_missing_47_50"))
+invisible(gc())
+
+```
+
+# 10.Conensus Sequence
+
+From this data I was able to calculate the consensus sequence of α-syn. Shown below are the sequences that represent human α-syn, the most abundant residue at each position and the residues that were conserved in over 50% of the species analysed.
+
+```{r}
+
+# Finding Consensus Sequence
+
+############################################################################
+# Consensus Sequence Limited to >50% #
+############################################################################
+
+tmp1 <- subset(plot.data, plot.data$count >= (nrow(df)/2)) # Finds all residues present in >50% of sequences
+
+tmp2 <- data.frame(position = seq(1,nrow(min_data),1)) 
+
+consensus <- merge(tmp1, tmp2, all = TRUE) # adds back positions not conserved as NA
+
+consensus$residue[is.na(consensus$residue) == TRUE] <- "-" # Replacing missing residues with -
+
+consensus_sequence_50 <- ""
+
+for (i in 1:nrow(consensus)) {
+  x <- consensus$residue[i]
+  consensus_sequence_50 <- paste(consensus_sequence_50, x, sep="") # Adding each residue one by one
+}
+
+############################################################################
+# Consensus Sequence of most common residues at each position (no cut-off) #
+############################################################################
+
+tmp1 <- plot.data %>% 
+          group_by(position) %>% 
+           slice(which.max(count)) 
+
+tmp2 <- data.frame(position = seq(1,nrow(min_data),1)) 
+
+consensus <- merge(tmp1, tmp2, all = TRUE) # adds back positions not conserved as NA
+
+consensus$residue[is.na(consensus$residue) == TRUE] <- "-" # Replacing missing residues with -
+
+no_lim_consensus_sequence <- ""
+
+for (i in 1:nrow(consensus)) {
+  x <- consensus$residue[i]
+  no_lim_consensus_sequence <- paste(no_lim_consensus_sequence, x, sep="") # Adding each residue one by one
+}
+
+# Adding Consensus Sequences to dataframe
+consensus_table <- data.frame( Consensus = c("Human", "Most Common", "Over 50%"),
+                               Sequence = c(human_sequence, no_lim_consensus_sequence, consensus_sequence_50))
+
+# Cleaning up environment
+rm(list = c("tmp1", "tmp2", "i", "x"))
+
+```
+
+```{r}
+#| include: false
+
+# Writing to file
+
+sink("R_output/human_alignment/Data/consensus_sequence.txt")
+cat("Most abundant residues at each position\n\n")
+cat(no_lim_consensus_sequence)
+cat("\n\nOver 50% Consensus\n\n")
+cat(consensus_sequence_50)
+cat("\n\nHuman Sequence\n\n")
+cat(human_sequence)
+sink()
+
+```
+
+
+
+::: {#fig-consensus column=body fig-cap="Regions highlighted in **green** are the P1 and P2 regions. The area shaded in **grey** corresponds to the NAC domain. Residues highlighted in **yellow** were found to differ between consensus and human α-syn. Residues coloured in **red** were not conserved in over 50% of the anaysed sequences."}
+
+![](quarto_images/annotated_consensus.png)
+
+:::
+
+# Colouring evolutionary distance plots based on A53T and S87N
+
+```{r}
+
+# Adding column to denote if species contains consensus deviations
+
+# Setting column initially to Human (Does not contain T53 or N87)
+lev_plot_data$conensus_variant <- "Human"
+
+# Looping through each row and checking for consensus variants
+
+for (i in 1:nrow(lev_plot_data)) {
+  for (j in lev_plot_data$sequence[i]) {
+      
+    # Separating the sequence string into a character vector
+      x <- str_split_1(j, "")
+      
+      
+      if(x[53] == "T" & x[87] != "N"){
+        
+        lev_plot_data$conensus_variant[i] <- "A53T"
+        
+      } 
+      if(x[53] != "T" & x[87] == "N"){
+        
+        lev_plot_data$conensus_variant[i] <- "S87N"
+        
+      } 
+      if(x[53] == "T" & x[87] == "N"){
+        
+        lev_plot_data$conensus_variant[i] <- "A53T/S87N"
+        
+      } 
+  }
+}
+
+# Setting legend order so that Yes is first
+lev_plot_data$conensus_variant <- factor(lev_plot_data$conensus_variant, 
+                                         levels = c("Human", "A53T", "S87N", "A53T/S87N"))
+
+# Plotting Levenshtein Distance
+ggplot(data = lev_plot_data, aes(x = reorder(common_name, similarity), y = similarity, 
+                                 colour = conensus_variant)) +
+  geom_point(size = 3) +
+  theme_classic()+
+  ylab("Levenshtein Distance") +
+  xlab("Species") +
+  scale_y_continuous(breaks = seq(0,nrow(min_data),10)) +
+  scale_colour_manual(values = c("black", "#D81B60", "#1E88E5", "#FFC107")) + 
+  theme(panel.grid.major = element_line(colour = "grey30", linewidth = 0.2, 
+                                          linetype = "dashed"),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(colour = "black", fill = NA, linewidth = 1.5),
+        axis.line.x = element_line(color="black", linewidth = 1.5),
+        axis.line.y = element_line(color="black", linewidth = 1.5),
+        plot.title = element_text(size = 20, face = "bold", colour = "black", hjust = 0.5),
+        axis.text.y = element_text(size = 12, colour = "black"),
+        axis.text.x = element_text(size = 14, colour = "black", angle = 90, hjust = 1, vjust = 0.4),
+        axis.title=element_text(size = 25, face = "bold"),
+        legend.title = element_text(size = 16, face = "bold"),
+        legend.text = element_text(size = 14)) +
+  labs(colour = "Consensus Variant")
+
+# Saving Plot
+ggsave(plot = last_plot(), 
+       filename = "R_output/human_alignment/Figures/levenshtein_distance_conensus_variant.png", 
+       width = 27, height = 10)
+
+# Plotting Weighted Levenshtein Distance
+
+ggplot(data = lev_plot_data, aes(x = reorder(common_name, weighted_similarity), y = weighted_similarity, 
+                                 colour = conensus_variant)) +
+  geom_point(size = 3) +
+  theme_classic()+
+  ylab("Weighted Levenshtein Distance") +
+  xlab("Species") +
+  scale_y_continuous(breaks = seq(0,99999,10)) +
+  scale_colour_manual(values = c("black", "#D81B60", "#1E88E5", "#FFC107")) + 
+  theme(panel.grid.major = element_line(colour = "grey30", linewidth = 0.2, 
+                                          linetype = "dashed"),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(colour = "black", fill = NA, linewidth = 1.5),
+        plot.title = element_text(size = 20, face = "bold", colour = "black", hjust = 0.5),
+        axis.text.y = element_text(size = 12, colour = "black"),
+        axis.text.x = element_text(size = 14, colour = "black", angle = 90, hjust = 1, vjust = 0.4),
+        axis.title=element_text(size = 25, face = "bold"),
+        axis.line.x = element_line(color="black", linewidth = 1.5),
+        axis.line.y = element_line(color="black", linewidth = 1.5),
+        legend.title = element_text(size = 16, face = "bold"),
+        legend.text = element_text(size = 14)) +
+  labs(colour = "Consensus Variant")
+
+# Saving Plot
+ggsave(plot = last_plot(), 
+       filename = "R_output/human_alignment/Figures/levenshtein_distance_weighted_conensus_variant.png", 
+       width = 27, height = 10)
+
+
+# Plotting BLOSUM75 Score
+
+ggplot(data = lev_plot_data, aes(x = reorder(common_name, -blosum_score), y = blosum_score, 
+                                 colour = conensus_variant)) +
+  geom_point(size = 3) +
+  theme_classic()+
+  ylab("BLOSUM75 Score") +
+  xlab("Species") +
+  scale_y_continuous(breaks = seq(0,99999,50)) +
+  scale_colour_manual(values = c("black", "#D81B60", "#1E88E5", "#FFC107")) +  
+  theme(panel.grid.major = element_line(colour = "grey30", linewidth = 0.2, 
+                                          linetype = "dashed"),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(colour = "black", fill = NA, linewidth = 1.5),
+        plot.title = element_text(size = 20, face = "bold", colour = "black", hjust = 0.5),
+        axis.text.y = element_text(size = 12, colour = "black"),
+        axis.text.x = element_text(size = 14, colour = "black", angle = 90, hjust = 1, vjust = 0.4),
+        axis.title=element_text(size = 25, face = "bold"),
+        axis.line.x = element_line(color="black", linewidth = 1.5),
+        axis.line.y = element_line(color="black", linewidth = 1.5),
+        legend.title = element_text(size = 16, face = "bold"),
+        legend.text = element_text(size = 14)) +
+  labs(colour = "Consensus Variant")
+
+# Saving Plot
+ggsave(plot = last_plot(), 
+       filename = "R_output/human_alignment/Figures/BLOSUM75_score_conensus_variant.png", 
+       width = 27, height = 10)
+
+
+# Counting the number of each group
+
+#print(table(lev_plot_data$conensus_variant))
+#    Human      A53T      S87N A53T/S87N 
+#       21        63        17        86 
+
+```
+
+
+# 11.Creating Phylogenetic Trees
+
+```{r}
+
+#if(!require("ggtree")) BiocManager::install("ggtree"); library("ggtree")
+
+#browseVignettes("ggtree")
+
+```
+
+# Analysing 5 closest species to human that do NOT have 47-50
+
+```{r}
+
+closest_p2 <- lev_plot_data %>% filter(del_47_50 == "Yes") 
+
+closest_p2 <- closest_p2[order(closest_p2$similarity), ] 
+
+closest_p2 <- closest_p2[1:5,]
+
+```
+
+```{r}
+
+# Select columns from min_data for the 5 most similar sequences to human that are missing all of 47-50
+min_data_closest_p2 <- min_data %>% select(closest_p2$species)
+
+# Repeat residue counting for this subset of sequences
+
+amino_acids <- c("A","G","I","L","P","V","F","W","Y","D",
+                 "E","R","H","K","S","T","C","M","N","Q")
+
+for (i in amino_acids) {
+  
+  x <- rowSums(min_data_closest_p2 == i)  # Counts the number of occurrences of the amino acid across the rows
+  min_data_closest_p2[ , ncol(min_data_closest_p2) + 1] <- x  # Append new column
+  colnames(min_data_closest_p2)[ncol(min_data_closest_p2)] <- paste(i)  # Rename column name
+  
+}
+
+# Saving data as a csv
+#write.csv(min_data_closest_p2, "R_output/P2/Data/P2_del_sequences_and_counts.csv", row.names = FALSE)
+
+# Extracting only the counts from min_data_closest_p2
+residue_counts <- min_data_closest_p2[,(ncol(min_data_closest_p2)-19):ncol(min_data_closest_p2)]
+
+# Numbering the residues and adding it to data as the first column
+position <- seq(1,nrow(residue_counts),1)
+residue_counts <-cbind(position,residue_counts)
+
+
+# Saving residue_counts as a csv
+#write.csv(residue_counts, "R_output/P2/Data/residue_counts.csv", row.names = FALSE)
+
+# Cleaning environment
+rm(list=c("i", "x", "position", "amino_acids"))
+invisible(gc())
+
+
+```
+
+```{r}
+#| include: false
+
+# Making data into plot-ready
+closest.p2.plot.data <- residue_counts %>%
+                          pivot_longer(!position, names_to = "residue", values_to = "count")
+
+closest.p2.plot.data <- closest.p2.plot.data[order(closest.p2.plot.data$position),] # ordering data by position (ascending order)
+
+# Min Alignment Plotting
+# Coloured by AA
+
+ggplot(data = closest.p2.plot.data, aes(x = position, y = count, fill = residue, group = count)) +
+  geom_bar(colour = "black", stat = "identity") +
+  theme_classic() +
+  ylab("Count") +
+  xlab("Residue") +
+  scale_y_continuous(breaks = seq(0,1000,1), expand = expansion(mult = c(0, 0.05))) +
+  scale_x_continuous(breaks = seq(0,nrow(residue_counts),10), expand = expansion(mult = c(0.01, 0.01))) +
+  theme(panel.grid.major = element_line(colour = "grey30", linewidth = 0.5, 
+                                          linetype = "dashed"),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(colour = "black", fill = NA, linewidth = 1.5),
+        plot.title = element_text(size = 20, face = "bold", colour = "black", hjust = 0.5),
+        axis.text.y = element_text(size = 18, colour = "black"),
+        axis.text.x = element_text(size = 18, colour = "black", angle = 90, hjust=1, vjust = 0.3),
+        axis.title=element_text(size = 20, face = "bold"),
+        axis.line.x = element_line(color="black", linewidth = 1.5),
+        axis.line.y = element_line(color="black", linewidth = 1.5),
+        legend.text = element_text(size = 15, face = "bold")) +
+  labs(fill = "") +
+  annotate(geom = "segment", x=0, xend = nrow(residue_counts), y=nrow(closest_p2), 
+           yend=nrow(closest_p2), linewidth = 1.5, colour = "red", linetype = "dashed") 
+
+# Saving plot
+ggsave(plot = last_plot(), filename = "R_output/P2/Figures/closest_5_p2_del_counts_by_residue.png", 
+       width = 20, height = 8)
+
+# Cleaning Environment
+rm(list = c("closest_p2", "min_data_closest_p2", "closest.p2.plot.data"))
+
+```
+
